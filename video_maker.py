@@ -56,6 +56,11 @@ wall = np.transpose(np.where(maze == 0))
 traj_files = sorted(glob.glob(data + 'part_*.txt'))
 timestamps = sorted([int(re.search(r'part_(\d+)\.txt$', f).group(1)) for f in traj_files])
 
+# read the first trajectory file to determine the number of particles
+first_traj_data = np.loadtxt(data + f'part_{timestamps[0]}.txt', skiprows=3)
+first_traj_data = np.atleast_2d(first_traj_data)  # Ensure it's a 2D array
+num_particles = first_traj_data.shape[0]
+
 # Load dt from parameter file
 def get_dt_from_params(filename):
     with open(filename, 'r') as file:
@@ -106,9 +111,15 @@ ax.text(source[0] + 4, source[1] + 8, 'Exit', color='k', fontsize=15, ha='right'
 start = np.array([5, 86])
 ax.text(start[0], start[1], 'Start', color='k', fontsize=15, ha='right', va='bottom', backgroundcolor='white', rotation='vertical')
 
-# Trajectory lines
-trajectory_line, = ax.plot([], [], 'w-', linewidth=3.0, alpha=1.0)
-current_point, = ax.plot([], [], 'o', color='cyan', markersize=7)
+# Trajectory lines and current points for each particle
+colors = ['white', 'yellow']  # Adjust colors as needed
+trajectory_lines = []
+current_points = []
+for p in range(num_particles):
+    line, = ax.plot([], [], '-', linewidth=3.0, alpha=1.0, color=colors[p % len(colors)])
+    trajectory_lines.append(line)
+    point, = ax.plot([], [], 'o', markersize=7, color=colors[p % len(colors)])
+    current_points.append(point)
 
 # Timestamp text
 timestamp_text = ax.text(0.02, 0.98, '', transform=ax.transAxes,
@@ -121,32 +132,42 @@ fig.tight_layout()
 
 # Pre-load trajectory data
 print("Loading and preprocessing all trajectory data...")
-all_x_points, all_y_points = [], []
+# Determine num_particles from first file
+first_traj_data = np.loadtxt(data + f'part_{timestamps[0]}.txt', skiprows=3)
+first_traj_data = np.atleast_2d(first_traj_data)
+num_particles = first_traj_data.shape[0]
+
+all_x_points = [[] for _ in range(num_particles)]
+all_y_points = [[] for _ in range(num_particles)]
 trajectory_indices = {}
 
-current_index = 0
 for ts in timestamps:
     traj_data = np.loadtxt(data + f'part_{ts}.txt', skiprows=3)
-    x_traj = np.atleast_1d(traj_data[1])
-    y_traj = np.atleast_1d(traj_data[2])
-    all_x_points.extend(x_traj)
-    all_y_points.extend(y_traj)
-    current_index += len(x_traj)
-    trajectory_indices[ts] = current_index
+    traj_data = np.atleast_2d(traj_data)
 
-all_x_points = np.array(all_x_points, dtype=np.float32)
-all_y_points = np.array(all_y_points, dtype=np.float32)
+    for p in range(num_particles):
+        all_x_points[p].append(traj_data[p, 1])
+        all_y_points[p].append(traj_data[p, 2])
+
+    trajectory_indices[ts] = len(all_x_points[0])  # All particles have the same number of points
+
+# Convert to numpy arrays
+for p in range(num_particles):
+    all_x_points[p] = np.array(all_x_points[p], dtype=np.float32)
+    all_y_points[p] = np.array(all_y_points[p], dtype=np.float32)
+
 
 # Update function
 def update(frame):
     timestamp = timestamps[frame]
     conc_plot.set_array(concentration_data[frame].T)
     end_idx = trajectory_indices[timestamp]
-    trajectory_line.set_data(all_x_points[:end_idx], all_y_points[:end_idx])
-    if end_idx > 0:
-        current_point.set_data([all_x_points[end_idx - 1]], [all_y_points[end_idx - 1]])
+    for p in range(num_particles):
+        trajectory_lines[p].set_data(all_x_points[p][:end_idx], all_y_points[p][:end_idx])
+        if end_idx > 0:
+            current_points[p].set_data([all_x_points[p][end_idx - 1]], [all_y_points[p][end_idx - 1]])
     timestamp_text.set_text(formatted_times[frame])
-    return conc_plot, trajectory_line, current_point
+    return [conc_plot] + trajectory_lines + current_points
 
 # Create animation
 ani = animation.FuncAnimation(fig, update, frames=len(timestamps), interval=100, blit=True)
