@@ -112,7 +112,12 @@ start = np.array([5, 86])
 ax.text(start[0], start[1], 'Start', color='k', fontsize=15, ha='right', va='bottom', backgroundcolor='white', rotation='vertical')
 
 # Trajectory lines and current points for each particle
-colors = ['white', 'yellow']  # Adjust colors as needed
+colors = [
+    'red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray',
+    'olive', 'cyan', 'magenta', 'yellow', 'black', 'white', 'lime', 'teal',
+    'navy', 'maroon', 'silver', 'gold', 'indigo', 'violet', 'turquoise', 'salmon',
+    'khaki', 'plum', 'coral', 'skyblue', 'darkgreen', 'darkred', 'darkblue', 'darkorange'
+]
 trajectory_lines = []
 current_points = []
 for p in range(num_particles):

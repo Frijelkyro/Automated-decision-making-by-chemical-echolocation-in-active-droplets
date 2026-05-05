@@ -45,7 +45,7 @@ Ly = 100.0 #domain size
 n_xbins = int(Lx/dx) #number of bins in x direction
 n_ybins = int(Ly/dx) #number of bins in y direction
 n_steps = 40 #number of time steps
-dt = 1 * 10**(-3) #time step size
+dt = 1.0 * 10**(-3) #time step size
 gamma = (Dc * dt) / (dx ** 2) #gamma parameter
 time_loop = 100 #number of time loops
 time = np.arange(0, time_loop*n_steps, 1)*dt
@@ -75,31 +75,18 @@ wall = np.transpose(np.where(maze == 0))
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 2  # Number of particles
+num_particles = 1 # Number of particles
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
-p[0, 0, 0] = np.random.uniform(2, 4) # Initial x-coordinate
-p[0, 0, 1] = 81.05 # Initial y-coordinate
-v[0, 0, 0] = 0.0  # Initial x-velocity
-v[0, 0, 1] = 0.0  # Initial y-velocity
-theta[0, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
-omega[0, 0] = 0.0  # Initial angular velocity
-p[1, 0, 0] = np.random.uniform(2, 4) # Initial x-coordinate
-p[1, 0, 1] = 81.45 # Initial y-coordinate
-v[1, 0, 0] = 1.0  # Initial x-velocity
-v[1, 0, 1] = 0.0  # Initial y-velocity
-theta[1, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
-omega[1, 0] = 0.0  # Initial angular velocity
-
-#for particle_id in range(num_particles):
-#    p[particle_id, 0, 0] = np.random.uniform(2, 4) # Initial x-coordinate
-#    p[particle_id, 0, 1] = 81.05 # Initial y-coordinate
-#    v[particle_id, 0, 0] = 0.0  # Initial x-velocity
-#    v[particle_id, 0, 1] = 0.0  # Initial y-velocity
-#    theta[particle_id, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
-#    omega[particle_id, 0] = 0.0  # Initial angular velocity
+for particle_id in range(num_particles):
+    p[particle_id, 0, 0] = 2 # Initial x-coordinate
+    p[particle_id, 0, 1] = 81.05 # Initial y-coordinate
+    v[particle_id, 0, 0] = 0.0  # Initial x-velocity
+    v[particle_id, 0, 1] = 0.0  # Initial y-velocity
+    theta[particle_id, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
+    omega[particle_id, 0] = 0.0  # Initial angular velocity
 
 # Create new map and display the result of chemical diffusion
 conc = initialize_c(c_initial, n_steps, maze)
