@@ -68,8 +68,8 @@ file_prefix_part = data + '/part'
 # Generate a maze
 #maze = box_maze(n_xbins, n_ybins)
 
-maze = maze_from_file('different_mazes/empty_box.tsv')
-#maze = maze_from_file('different_mazes/Ran_maze_size_prop_to_droplet.tsv')
+# maze = maze_from_file('different_mazes/empty_box.tsv')
+maze = maze_from_file('different_mazes/Ran_maze_size_prop_to_droplet.tsv')
 #maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
 wall = np.transpose(np.where(maze == 0))
 
@@ -87,7 +87,9 @@ min_separation = 0.1
 placed_positions = np.empty((0, 2), dtype=np.float32)
 for particle_id in range(num_particles):
     while True:
-        candidate = np.random.uniform(45, 55, size=2)
+        candidate = np.empty((0, 2), dtype=np.float32)
+        candidate[0] = np.random.uniform(2, 4)
+        candidate[1] = np.random.uniform(81.05, 84.05)
         if placed_positions.shape[0] == 0:
             break
         diffs = placed_positions - candidate
