@@ -67,7 +67,9 @@ file_prefix_part = data + '/part'
 
 # Generate a maze
 #maze = box_maze(n_xbins, n_ybins)
-maze = maze_from_file('different_mazes/Ran_maze_size_prop_to_droplet.tsv')
+
+maze = maze_from_file('different_mazes/empty_box.tsv')
+#maze = maze_from_file('different_mazes/Ran_maze_size_prop_to_droplet.tsv')
 #maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
 wall = np.transpose(np.where(maze == 0))
 
