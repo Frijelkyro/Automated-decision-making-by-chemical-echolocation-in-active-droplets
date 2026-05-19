@@ -44,10 +44,10 @@ Lx = 100.0 #domain size
 Ly = 100.0 #domain size
 n_xbins = int(Lx/dx) #number of bins in x direction
 n_ybins = int(Ly/dx) #number of bins in y direction
-n_steps = 40 #number of time steps
-dt = 1.0 * 10**(-3) #time step size
+n_steps = 400 #number of time steps
+dt = 0.10 * 10**(-3) #time step size
 gamma = (Dc * dt) / (dx ** 2) #gamma parameter
-time_loop = 100 #number of time loops
+time_loop = 1000 #number of time loops
 time = np.arange(0, time_loop*n_steps, 1)*dt
 time = time[np.newaxis,:]
 total_time = dt*time_loop*n_steps #total time of the simulation
@@ -77,19 +77,21 @@ wall = np.transpose(np.where(maze == 0))
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 16  # Number of particles
+num_particles = 10 # Number of particles
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 
-min_separation = 0.1
+min_separation = 0.8
+initial_center = np.array([4.0, 82.0], dtype=np.float32)
+initial_spread = 1.3
 placed_positions = np.empty((0, 2), dtype=np.float32)
+print_nearest_wall(maze, initial_center[0], initial_center[1])
 for particle_id in range(num_particles):
     while True:
-        candidate = np.empty((0, 2), dtype=np.float32)
-        candidate[0] = np.random.uniform(2, 4)
-        candidate[1] = np.random.uniform(81.05, 84.05)
+        candidate = np.random.uniform(initial_center - initial_spread,
+                                      initial_center + initial_spread).astype(np.float32)
         if placed_positions.shape[0] == 0:
             break
         diffs = placed_positions - candidate
@@ -102,6 +104,7 @@ for particle_id in range(num_particles):
     v[particle_id, 0, 1] = 0.0  # Initial y-velocity
     theta[particle_id, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
     omega[particle_id, 0] = 0.0  # Initial angular velocity
+print("Initial positions initialized."+f"Placed positions:\n{placed_positions}")
 
 # Create new map and display the result of chemical diffusion
 conc = initialize_c(c_initial, n_steps, maze)
