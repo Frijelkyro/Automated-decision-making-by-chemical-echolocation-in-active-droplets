@@ -49,8 +49,8 @@ from maze_functions import maze_from_file, load_c_from_file, load_traj_from_file
 data = './data/'
 
 # Load the maze
-#maze = maze_from_file('./different_mazes/Ran_maze_size_prop_to_droplet.tsv')
-maze = maze_from_file('./different_mazes/empty_box.tsv')
+maze = maze_from_file('./different_mazes/Ran_maze_size_prop_to_droplet.tsv')
+#maze = maze_from_file('./different_mazes/empty_box.tsv')
 wall = np.transpose(np.where(maze == 0))
 
 # Get all available timestamps by listing files
