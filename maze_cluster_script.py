@@ -77,14 +77,25 @@ wall = np.transpose(np.where(maze == 0))
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 1 # Number of particles
+num_particles = 16  # Number of particles
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
+
+min_separation = 0.1
+placed_positions = np.empty((0, 2), dtype=np.float32)
 for particle_id in range(num_particles):
-    p[particle_id, 0, 0] = 2 # Initial x-coordinate
-    p[particle_id, 0, 1] = 81.05 # Initial y-coordinate
+    while True:
+        candidate = np.random.uniform(45, 55, size=2)
+        if placed_positions.shape[0] == 0:
+            break
+        diffs = placed_positions - candidate
+        dists = np.hypot(diffs[:, 0], diffs[:, 1])
+        if np.all(dists >= min_separation):
+            break
+    p[particle_id, 0] = candidate
+    placed_positions = np.vstack([placed_positions, candidate])
     v[particle_id, 0, 0] = 0.0  # Initial x-velocity
     v[particle_id, 0, 1] = 0.0  # Initial y-velocity
     theta[particle_id, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
