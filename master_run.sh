@@ -1,5 +1,9 @@
 #!/bin/bash
 
-python maze_cluster_script.py
-python video_maker.py
-cp data/particle_trajectory.mp4 ../videos/particle_trajectory.mp4
+for i in {1..20}; do
+    rm data/*.txt
+    python maze_cluster_script.py
+    python video_maker.py
+    printf -v padded "%02d" $i
+    cp data/particle_trajectory.mp4 "../videos/particle_trajectory_$padded.mp4"
+done
