@@ -45,9 +45,9 @@ Ly = 100.0 #domain size
 n_xbins = int(Lx/dx) #number of bins in x direction
 n_ybins = int(Ly/dx) #number of bins in y direction
 n_steps = 400 #number of time steps
-dt = 0.10 * 10**(-3) #time step size
+dt = 1.0 * 10**(-3) #time step size
 gamma = (Dc * dt) / (dx ** 2) #gamma parameter
-time_loop = 1000 #number of time loops
+time_loop = 100 #number of time loops
 time = np.arange(0, time_loop*n_steps, 1)*dt
 time = time[np.newaxis,:]
 total_time = dt*time_loop*n_steps #total time of the simulation
@@ -83,28 +83,17 @@ v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 
-min_separation = 0.8
-initial_center = np.array([4.0, 82.0], dtype=np.float32)
-initial_spread = 1.3
-placed_positions = np.empty((0, 2), dtype=np.float32)
-print_nearest_wall(maze, initial_center[0], initial_center[1])
-for particle_id in range(num_particles):
-    while True:
-        candidate = np.random.uniform(initial_center - initial_spread,
-                                      initial_center + initial_spread).astype(np.float32)
-        if placed_positions.shape[0] == 0:
-            break
-        diffs = placed_positions - candidate
-        dists = np.hypot(diffs[:, 0], diffs[:, 1])
-        if np.all(dists >= min_separation):
-            break
-    p[particle_id, 0] = candidate
-    placed_positions = np.vstack([placed_positions, candidate])
-    v[particle_id, 0, 0] = 0.0  # Initial x-velocity
-    v[particle_id, 0, 1] = 0.0  # Initial y-velocity
-    theta[particle_id, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
-    omega[particle_id, 0] = 0.0  # Initial angular velocity
-print("Initial positions initialized."+f"Placed positions:\n{placed_positions}")
+emission_rate = 1.0  # droplets per second
+emitter_position = np.array([4.0, 82.0], dtype=np.float32)
+
+# All particles start at the same emitter location and activate at delayed birth times.
+p[:, 0, :] = emitter_position
+v[:, 0, :] = 0.0
+theta[:, 0] = np.random.uniform(0, 2.0 * np.pi, size=num_particles)
+omega[:, 0] = 0.0
+
+birth_steps = np.array([int(round(i / emission_rate / dt)) for i in range(num_particles)], dtype=int)
+print(f"Emitter position: {emitter_position}, birth steps: {birth_steps}")
 
 # Create new map and display the result of chemical diffusion
 conc = initialize_c(c_initial, n_steps, maze)
@@ -118,6 +107,7 @@ parameter_dict={'Dc': Dc, 'Dp': Dp, 'Bp': Bp, 'moving_source_production_strength
                 'static_source_production_strength': static_source_production_strength, 'advection': advection, 'massive_particle': massive_particle,
                 'dx': dx, 'Lx': Lx, 'Ly': Ly, 'n_xbins': n_xbins, 'n_ybins': n_ybins, 'n_steps': n_steps, 'dt': dt, 'gamma': gamma,
                 'total_time': total_time, 'write_every': write_every, 'num_particles': num_particles, 'time_loop': time_loop,
+                'birth_steps': birth_steps, 'emitter_position': tuple(emitter_position),
                 'param_filename': param_filename, 'grid_filename': grid_filename, 'file_prefix_conc': file_prefix_conc,
                 'file_prefix_part': file_prefix_part, 'exit_radius': exit_radius}
 

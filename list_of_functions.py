@@ -16,6 +16,15 @@ def initialize_c_from_file(c_initial, n_steps, maze, filename):
     c[0] = np.loadtxt(filename, skiprows=3).reshape((nx, ny))
     return c
 
+
+def compute_birth_steps(num_particles, emission_rate, dt):
+    emission_interval = 1.0 / emission_rate
+    return np.array([int(round(i * emission_interval / dt)) for i in range(num_particles)], dtype=int)
+
+
+def active_particle_mask(timestep, birth_steps):
+    return timestep >= birth_steps
+
 #define the source function for a moving point source
 def moving_point_source(s, production_strength, timestep, particle_positions, dx, dt, moving_source_decay_rate, n_steps):
     t = timestep % n_steps
@@ -94,11 +103,13 @@ def noflux_maze(conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_d
 
     return conc
 
-def chemotaxis_force(position, t, c, maze, dx, Bp):
+def chemotaxis_force(position, t, c, maze, dx, Bp, active_mask=None):
     num_particles = position.shape[0]
     all_forces = np.zeros((num_particles, 2))
+    if active_mask is None:
+        active_mask = np.ones(num_particles, dtype=bool)
 
-    for particle_id in range(num_particles):
+    for particle_id in np.where(active_mask)[0]:
         x_bin = int(np.rint(position[particle_id, t, 0] / dx))
         y_bin = int(np.rint(position[particle_id, t, 1] / dx))
         
@@ -124,16 +135,19 @@ def chemotaxis_force(position, t, c, maze, dx, Bp):
         
     return all_forces
 
-def interaction_force(position, t, dx, epsilon_LJ):
+def interaction_force(position, t, dx, epsilon_LJ, active_mask=None):
     num_particles = position.shape[0]
     interaction_forces = np.zeros((num_particles, num_particles, 2))
+    if active_mask is None:
+        active_mask = np.ones(num_particles, dtype=bool)
 
-    #epsilon_LJ = 0.50  # Lennard-Jones potential parameter
-    sigma = dx  # Lennard-Jones potential parameter
+    active_indices = np.where(active_mask)[0]
+    sigma = dx
 
-    
-    for i in range(num_particles):
-        for j in range(i + 1, num_particles):
+    for i_index in range(len(active_indices)):
+        i = active_indices[i_index]
+        for j_index in range(i_index + 1, len(active_indices)):
+            j = active_indices[j_index]
             disp = position[j, t, :] - position[i, t, :]
             dist = np.linalg.norm(disp)
             
@@ -144,14 +158,16 @@ def interaction_force(position, t, dx, epsilon_LJ):
     
     return interaction_forces
 
-def wall_force(position, t, wall_coords, dx):
+def wall_force(position, t, wall_coords, dx, active_mask=None):
     num_particles = position.shape[0]
+    if active_mask is None:
+        active_mask = np.ones(num_particles, dtype=bool)
 
     r_cut = 2.0 * dx
     sigma = r_cut / 2.0 ** (1.0 / 6.0)
     forces = np.zeros((num_particles, 2))
 
-    for i in range(num_particles):
+    for i in np.where(active_mask)[0]:
         disp_from_wall = position[i, t, :] - wall_coords
         dist = np.linalg.norm(disp_from_wall, axis=1)
         if min(dist) < r_cut:
@@ -169,14 +185,15 @@ def wall_force(position, t, wall_coords, dx):
 
     return forces
 
-def self_propulsion_force(position, timestep, theta, dt, sp_decay_rate, n_steps, self_propulsion_speed):
+def self_propulsion_force(position, timestep, theta, dt, sp_decay_rate, n_steps, self_propulsion_speed, active_mask=None):
     t = timestep % n_steps
     num_particles = position.shape[0]
     forces = np.zeros((num_particles, 2))
-    
-    for i in range(num_particles):
+    if active_mask is None:
+        active_mask = np.ones(num_particles, dtype=bool)
+
+    for i in np.where(active_mask)[0]:
         forces[i, 0] = self_propulsion_speed * np.cos(theta[i, t]) * np.exp(-timestep * dt * sp_decay_rate)
-        #forces[i, 0] = self_propulsion_speed * np.cos(theta[i, t])
         forces[i, 1] = self_propulsion_speed * np.sin(theta[i, t]) * np.exp(-timestep * dt * sp_decay_rate)
         #forces[i, 1] = self_propulsion_speed * np.sin(theta[i, t])
         
@@ -283,6 +300,8 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step
     epsilon_LJ = kwargs.get('epsilon_LJ',1)
     static_source_position = kwargs.get('static_source_position',(1,1))
     exit_radius = kwargs.get('exit_radius',20)
+    birth_steps = kwargs.get('birth_steps', np.zeros(num_particles, dtype=int))
+    emitter_position = np.array(kwargs.get('emitter_position',(0.0, 0.0)), dtype=np.float32)
     
             
     nt, nx, ny = c.shape
@@ -315,15 +334,27 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step
         C = c[t, 1:-1, 2:]  # c[k, i, j+1]
         D = c[t, 1:-1, :-2]  # c[k, i, j-1]
         E = c[t, 1:-1, 1:-1]  # c[k, i, j]
+
+        active_mask = active_particle_mask(timestep, birth_steps)
+        inactive_mask = ~active_mask
+
+        position[inactive_mask, t, :] = emitter_position
+        velocity[inactive_mask, t, :] = 0.0
+        if t > 0:
+            theta[inactive_mask, t] = theta[inactive_mask, t-1]
+            ang_velocity[inactive_mask, t] = ang_velocity[inactive_mask, t-1]
+
         particle_positions = position[:, t, :]
-        source = moving_point_source(source, moving_source_production_strength, timestep, particle_positions, dx, dt, moving_source_decay_rate, n_steps) 
+        source = moving_point_source(source, moving_source_production_strength, timestep,
+                                     particle_positions[active_mask], dx, dt,
+                                     moving_source_decay_rate, n_steps)
         source = static_point_source(source, static_source_production_strength, timestep, static_source_position, dx, dt, static_source_decay_rate, n_steps)
         S = source[t, 1:-1, 1:-1]
         result = gamma * (A + B + C + D - 4 * E) + E + S * dt - global_decay_strength * dt * E
-        
+
         if advection == True:
             # Calculate fluid velocity
-            ux, uy = update_flow_field(ux, uy, timestep, particle_positions, dx, dt, moving_source_decay_rate, n_steps)
+            ux, uy = update_flow_field(ux, uy, timestep, particle_positions[active_mask], dx, dt, moving_source_decay_rate, n_steps)
                         
             # Calculate advection term
             adv = -(dt/(2.0 * dx)) * (np.multiply(ux[t, 1:-1, 1:-1], (A - B))  + np.multiply(uy[t, 1:-1, 1:-1], (C - D)))
@@ -338,10 +369,10 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step
         noflux_maze(c, t+1, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_neg_indices, maze)
         
         # Forces
-        forces_chemotaxis = chemotaxis_force(position, t, c, maze, dx, Bp)
-        forces_interaction = interaction_force(position, t, dx, epsilon_LJ)
-        forces_wall = wall_force(position, t, wall_coords, dx)
-        forces_self_propulsion = self_propulsion_force(position, timestep, theta, dt, sp_decay_rate, n_steps, self_propulsion_speed)
+        forces_chemotaxis = chemotaxis_force(position, t, c, maze, dx, Bp, active_mask=active_mask)
+        forces_interaction = interaction_force(position, t, dx, epsilon_LJ, active_mask=active_mask)
+        forces_wall = wall_force(position, t, wall_coords, dx, active_mask=active_mask)
+        forces_self_propulsion = self_propulsion_force(position, timestep, theta, dt, sp_decay_rate, n_steps, self_propulsion_speed, active_mask=active_mask)
         
         f_chem[:, t, :] = forces_chemotaxis
         f_int[:, t, :] = forces_interaction.sum(axis=1)
@@ -353,6 +384,13 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step
         
         if (massive_particle==True):
             for particle_id in range(num_particles):
+                if not active_mask[particle_id]:
+                    position[particle_id, t + 1, :] = emitter_position
+                    velocity[particle_id, t + 1, :] = 0.0
+                    theta[particle_id, t + 1] = theta[particle_id, t]
+                    ang_velocity[particle_id, t + 1] = ang_velocity[particle_id, t]
+                    continue
+
                 position[particle_id, t + 1, 0] = position[particle_id, t, 0] + dt * velocity[particle_id, t, 0]
                 position[particle_id, t + 1, 1] = position[particle_id, t, 1] + dt * velocity[particle_id, t, 1]
                 velocity[particle_id, t + 1, 0] = velocity[particle_id, t, 0] + (1/M)*(- dt * velocity[particle_id, t, 0] 
@@ -373,6 +411,13 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step
                                                                                         + dr_noise * np.random.normal(0, 1))
         else:
             for particle_id in range(num_particles):
+                if not active_mask[particle_id]:
+                    position[particle_id, t + 1, :] = emitter_position
+                    velocity[particle_id, t + 1, :] = 0.0
+                    theta[particle_id, t + 1] = theta[particle_id, t]
+                    ang_velocity[particle_id, t + 1] = ang_velocity[particle_id, t]
+                    continue
+
                 position[particle_id, t + 1, 0] = position[particle_id, t, 0] + (  dt * forces_self_propulsion[particle_id, 0] 
                                                                                 + dt * forces_chemotaxis[particle_id, 0] 
                                                                                 + dt * forces_interaction[particle_id, :, 0].sum() 
