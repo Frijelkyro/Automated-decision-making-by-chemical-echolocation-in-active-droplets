@@ -12,7 +12,7 @@ Dr: 3.0
 M: 0.06
 J: 0.02
 epsilon_LJ: 0.1
-static_source_position: (90.2, 10.5)
+static_source_position: (40, 95)
 static_source_production_strength: 0.0
 advection: False
 massive_particle: False
