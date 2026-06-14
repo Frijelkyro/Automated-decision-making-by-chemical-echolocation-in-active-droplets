@@ -30,7 +30,7 @@ M = 6.0*10**(-2) #mass of the particle
 J = 2.0*10**(-2) #moment of inertia of the particle
 
 epsilon_LJ = 0.10  # Lennard-Jones potential parameter for interaction between particles
-static_source_position = (95, 82)  # Position of the static source
+static_source_position = (30, 82)  # Position of the static source
 static_source_production_strength = 0.0  # Strength of the static source
 static_source_decay_rate = 0.0 #characteristic decay rate of the source
 
@@ -116,10 +116,7 @@ exit_times = np.zeros(num_particles)
 for i in range(time_loop):
     conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep = chemical_solver(conc, p, theta, v, omega, maze, exit_times, start_step=i*n_steps, **parameter_dict)
     if exit:
-        print(p)
-        print(time[:, i*n_steps: exit_timestep+1, np.newaxis])
         current_time = np.repeat(time[:, i*n_steps: exit_timestep+1, np.newaxis], num_particles, axis=0)
-        print(current_time)
         current_traj = np.concatenate((current_time, p[:,0: exit_timestep%n_steps+1,:], 
                                        theta[:, 0: exit_timestep%n_steps+1, np.newaxis], v[:,0: exit_timestep%n_steps+1,:], 
                                        omega[:, 0: exit_timestep%n_steps+1, np.newaxis], f_sp[:,0: exit_timestep%n_steps+1,:],

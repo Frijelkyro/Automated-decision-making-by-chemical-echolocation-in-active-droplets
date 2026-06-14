@@ -1,7 +1,8 @@
 #!/bin/bash
 
-for i in {1..20}; do
-    rm data/conc*.txt && rm data/part*_txt
+for i in {1..10}; do
+    rm data/conc*.txt
+    rm data/part*.txt
     python maze_cluster_script.py
     python video_maker.py
     printf -v padded "%02d" $i
