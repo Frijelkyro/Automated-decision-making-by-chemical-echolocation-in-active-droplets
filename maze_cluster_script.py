@@ -105,7 +105,7 @@ parameter_dict={'Dc': Dc, 'Dp': Dp, 'Bp': Bp, 'moving_source_production_strength
 
 full_traj = np.empty((num_particles,0,15), dtype=np.float32)
 for i in range(time_loop):
-    conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep = chemical_solver(conc, p, theta, v, omega, maze, start_step=i*n_steps, **parameter_dict)
+    conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep, exit_times = chemical_solver(conc, p, theta, v, omega, maze, start_step=i*n_steps, **parameter_dict)
     if exit:
         #current_traj = np.concatenate((time[:, i*n_steps: exit_timestep+1 , np.newaxis],p[:,0: exit_timestep%n_steps+1,:], theta[:, 0: exit_timestep%n_steps+1, np.newaxis], v[:,0: exit_timestep%n_steps+1,:], omega[:, 0: exit_timestep%n_steps+1, np.newaxis]), axis=-1)
         current_traj = np.concatenate((time[:, i*n_steps: exit_timestep+1 , np.newaxis], p[:,0: exit_timestep%n_steps+1,:], 
@@ -150,9 +150,10 @@ filename2 = data + '/exit_times.txt'
 if not os.path.isfile(filename2):
     # If the file doesn't exist, write the header
     with open(filename2, 'w') as f:
-        f.write("ExitTime Beta JobID\n")
+        f.write("ExitTime Beta JobID ParticleID\n")
 
 # Append the data to the file
 with open(filename2, 'a') as f:
-    f.write(f"{exit_timestep*dt} {beta} {job_id}\n")
+    for particle_id in range(num_particles):
+        f.write(f"{exit_timestep*dt} {beta} {job_id} {particle_id}\n")
     
