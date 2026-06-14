@@ -111,3 +111,41 @@ def load_c_from_file(maze, filename):
 def load_traj_from_file(filename):
     traj = np.loadtxt(filename, skiprows=1)
     return traj
+
+
+def print_nearest_wall(maze, x, y, dx=1.0):
+    """Find and print the nearest wall cell to the point (x, y).
+
+    - `maze` : 2D numpy array where wall cells equal 0.
+    - `x, y` : Cartesian coordinates in the same units as `dx`.
+    - `dx` : grid spacing (default 1.0).
+
+    Prints the nearest wall cell as (row, col), its approximate coordinates,
+    and the Euclidean distance from (x,y) to that wall cell in the same units
+    as the inputs.
+    Returns a tuple `(row, col, distance)`.
+    """
+    walls = np.argwhere(maze == 0)
+    if walls.size == 0:
+        print("No walls found in the maze.")
+        return None
+
+    # Interpret wall indices as (row, col) -> (y_index, x_index)
+    gx = x / dx
+    gy = y / dx
+
+    # Use wall cell centers for coordinate conversion
+    cell_centers_x = walls[:, 1] + 0.5
+    cell_centers_y = walls[:, 0] + 0.5
+    dists = np.hypot(cell_centers_x - gx, cell_centers_y - gy)
+    idx = int(np.argmin(dists))
+    nearest = walls[idx]
+    distance = float(dists[idx] * dx)
+
+    coord_x = cell_centers_x[idx] * dx
+    coord_y = cell_centers_y[idx] * dx
+    print(f"Closest wall at grid (row,col): {tuple(nearest)}")
+    print(f"Approx. wall coordinates: x={coord_x:.4f}, y={coord_y:.4f}")
+    print(f"Distance to point: {distance:.6f}")
+
+    return (int(nearest[0]), int(nearest[1]), distance)

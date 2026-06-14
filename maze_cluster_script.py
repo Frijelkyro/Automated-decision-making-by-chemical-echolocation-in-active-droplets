@@ -44,8 +44,8 @@ Lx = 100.0 #domain size
 Ly = 100.0 #domain size
 n_xbins = int(Lx/dx) #number of bins in x direction
 n_ybins = int(Ly/dx) #number of bins in y direction
-n_steps = 4000 #number of time steps
-dt = 10**(-3) #time step size
+n_steps = 400 #number of time steps
+dt = 1.0 * 10**(-3) #time step size
 gamma = (Dc * dt) / (dx ** 2) #gamma parameter
 time_loop = 100 #number of time loops
 time = np.arange(0, time_loop*n_steps, 1)*dt
@@ -67,6 +67,8 @@ file_prefix_part = data + '/part'
 
 # Generate a maze
 #maze = box_maze(n_xbins, n_ybins)
+
+# maze = maze_from_file('different_mazes/empty_box.tsv')
 maze = maze_from_file('different_mazes/Ran_maze_size_prop_to_droplet.tsv')
 #maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
 wall = np.transpose(np.where(maze == 0))
@@ -75,18 +77,23 @@ wall = np.transpose(np.where(maze == 0))
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 1  # Number of particles
+num_particles = 10 # Number of particles
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
-for particle_id in range(num_particles):
-    p[particle_id, 0, 0] = np.random.uniform(2, 4) # Initial x-coordinate
-    p[particle_id, 0, 1] = 81.05 # Initial y-coordinate
-    v[particle_id, 0, 0] = 0.0  # Initial x-velocity
-    v[particle_id, 0, 1] = 0.0  # Initial y-velocity
-    theta[particle_id, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
-    omega[particle_id, 0] = 0.0  # Initial angular velocity
+
+emission_rate = 1.0  # droplets per second
+emitter_position = np.array([4.0, 82.0], dtype=np.float32)
+
+# All particles start at the same emitter location and activate at delayed birth times.
+p[:, 0, :] = emitter_position
+v[:, 0, :] = 0.0
+theta[:, 0] = np.random.uniform(0, 2.0 * np.pi, size=num_particles)
+omega[:, 0] = 0.0
+
+birth_steps = np.array([int(round(i / emission_rate / dt)) for i in range(num_particles)], dtype=int)
+print(f"Emitter position: {emitter_position}, birth steps: {birth_steps}")
 
 # Create new map and display the result of chemical diffusion
 conc = initialize_c(c_initial, n_steps, maze)
@@ -100,6 +107,7 @@ parameter_dict={'Dc': Dc, 'Dp': Dp, 'Bp': Bp, 'moving_source_production_strength
                 'static_source_production_strength': static_source_production_strength, 'advection': advection, 'massive_particle': massive_particle,
                 'dx': dx, 'Lx': Lx, 'Ly': Ly, 'n_xbins': n_xbins, 'n_ybins': n_ybins, 'n_steps': n_steps, 'dt': dt, 'gamma': gamma,
                 'total_time': total_time, 'write_every': write_every, 'num_particles': num_particles, 'time_loop': time_loop,
+                'birth_steps': birth_steps, 'emitter_position': tuple(emitter_position),
                 'param_filename': param_filename, 'grid_filename': grid_filename, 'file_prefix_conc': file_prefix_conc,
                 'file_prefix_part': file_prefix_part, 'exit_radius': exit_radius}
 
@@ -107,8 +115,8 @@ full_traj = np.empty((num_particles,0,15), dtype=np.float32)
 for i in range(time_loop):
     conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep, exit_times = chemical_solver(conc, p, theta, v, omega, maze, start_step=i*n_steps, **parameter_dict)
     if exit:
-        #current_traj = np.concatenate((time[:, i*n_steps: exit_timestep+1 , np.newaxis],p[:,0: exit_timestep%n_steps+1,:], theta[:, 0: exit_timestep%n_steps+1, np.newaxis], v[:,0: exit_timestep%n_steps+1,:], omega[:, 0: exit_timestep%n_steps+1, np.newaxis]), axis=-1)
-        current_traj = np.concatenate((time[:, i*n_steps: exit_timestep+1 , np.newaxis], p[:,0: exit_timestep%n_steps+1,:], 
+        current_time = np.repeat(time[:, i*n_steps: exit_timestep+1, np.newaxis], num_particles, axis=0)
+        current_traj = np.concatenate((current_time, p[:,0: exit_timestep%n_steps+1,:], 
                                        theta[:, 0: exit_timestep%n_steps+1, np.newaxis], v[:,0: exit_timestep%n_steps+1,:], 
                                        omega[:, 0: exit_timestep%n_steps+1, np.newaxis], f_sp[:,0: exit_timestep%n_steps+1,:],
                                        f_chem[:,0: exit_timestep%n_steps+1,:], f_int[:,0: exit_timestep%n_steps+1,:],
@@ -116,8 +124,8 @@ for i in range(time_loop):
         full_traj = np.append(full_traj, current_traj, axis=1)
         conc[-1,:,:] = conc[exit_timestep % n_steps,:,:]
         break
-    #current_traj = np.concatenate((time[:, i*n_steps: (i+1)*n_steps, np.newaxis],p, theta[:, :, np.newaxis], v, omega[:, :, np.newaxis]), axis=-1)
-    current_traj = np.concatenate((time[:, i*n_steps: (i+1)*n_steps, np.newaxis],p, theta[:, :, np.newaxis], v, omega[:, :, np.newaxis],
+    current_time = np.repeat(time[:, i*n_steps: (i+1)*n_steps, np.newaxis], num_particles, axis=0)
+    current_traj = np.concatenate((current_time, p, theta[:, :, np.newaxis], v, omega[:, :, np.newaxis],
                                    f_sp, f_chem, f_int, f_wall), axis=-1)
     full_traj = np.append(full_traj, current_traj, axis=1)
     conc[0, :, :] = conc[-1, :, :]
