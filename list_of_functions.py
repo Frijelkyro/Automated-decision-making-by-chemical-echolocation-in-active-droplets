@@ -251,19 +251,22 @@ def write_particles(file_prefix, particles, theta, velocity, ang_velocity,
 
 
 
-def exit_condition(position, num_particles, timestep, n_steps, exit_point, exit_radius, exit_times):
+def exit_condition(position, num_particles, timestep, n_steps, exit_times, exit_point, exit_radius):
     # exit_times = np.zeros(num_particles)
     t = timestep % n_steps
     exit = np.zeros(num_particles)
     for particle_id in range(num_particles):
         dist = np.linalg.norm(position[particle_id,t] - exit_point)
-        if dist < exit_radius:
-            if exit_times[particle_id] == 0.0:
-                exit_times[particle_id] = timestep
+        if exit_times[particle_id] != 0.0:
             exit[particle_id] = 1
+        else:
+            if dist < exit_radius:
+                print("particle close to exit!")
+                exit_times[particle_id] = timestep
+                exit[particle_id] = 1
     return np.sum(exit) == num_particles
 
-def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step=0, **kwargs):
+def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times, start_step=0, **kwargs):
     
     #unpacking the kwargs
     dx = kwargs.get('dx',1)
@@ -330,7 +333,6 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step
     
     exit = False
     exit_timestep = np.inf
-    exit_times = np.zeros(num_particles)
 
     for timestep in range(start_step, start_step + nt - 1):
         t = timestep % nt
@@ -450,7 +452,7 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step
                             forces_self_propulsion, forces_chemotaxis, forces_interaction, forces_wall,
                             [timestep], num_particles, n_steps)
         
-        if exit_condition(position, num_particles, timestep, n_steps, exit_point=static_source_position, exit_radius=exit_radius, exit_times=exit_times):
+        if exit_condition(position, num_particles, timestep, n_steps, exit_times, exit_point=static_source_position, exit_radius=exit_radius):
             write_concentration(file_prefix_conc, c, [timestep], n_steps)
             write_particles(file_prefix_part, position, theta, velocity, ang_velocity,
                             forces_self_propulsion, forces_chemotaxis, forces_interaction, forces_wall,
@@ -459,4 +461,4 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, start_step
             exit_timestep = timestep
             break
             
-    return c, position, theta, velocity, ang_velocity, f_sp, f_chem, f_int, f_wall, exit, exit_timestep, exit_times
+    return c, position, theta, velocity, ang_velocity, f_sp, f_chem, f_int, f_wall, exit, exit_timestep
