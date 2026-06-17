@@ -30,7 +30,7 @@ M = 6.0*10**(-2) #mass of the particle
 J = 2.0*10**(-2) #moment of inertia of the particle
 
 epsilon_LJ = 0.10  # Lennard-Jones potential parameter for interaction between particles
-static_source_position = (30, 82)  # Position of the static source
+static_source_position = (90.2, 10.5)  # Position of the static source
 static_source_production_strength = 0.0  # Strength of the static source
 static_source_decay_rate = 0.0 #characteristic decay rate of the source
 
@@ -44,7 +44,7 @@ Lx = 100.0 #domain size
 Ly = 100.0 #domain size
 n_xbins = int(Lx/dx) #number of bins in x direction
 n_ybins = int(Ly/dx) #number of bins in y direction
-n_steps = 400 #number of time steps
+n_steps = 1000 #number of time steps
 dt = 1.0 * 10**(-3) #time step size
 gamma = (Dc * dt) / (dx ** 2) #gamma parameter
 time_loop = 100 #number of time loops
@@ -77,7 +77,7 @@ wall = np.transpose(np.where(maze == 0))
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 2 # Number of particles
+num_particles = 10 # Number of particles
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
@@ -164,5 +164,5 @@ if not os.path.isfile(filename2):
 # Append the data to the file
 with open(filename2, 'a') as f:
     for particle_id in range(num_particles):
-        f.write(f"{exit_timestep*dt} {beta} {job_id} {particle_id}\n")
+        f.write(f"{(exit_times[particle_id]-birth_steps[particle_id]) *dt} {beta} {job_id} {particle_id}\n")
     
