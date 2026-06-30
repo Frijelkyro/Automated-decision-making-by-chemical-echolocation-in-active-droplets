@@ -3,6 +3,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend suitable for saving files
 import matplotlib.pyplot as plt
 import seaborn as sns
+import shutil
 
 # Turn off interactive mode
 plt.ioff()
@@ -184,4 +185,5 @@ Writer = animation.writers['ffmpeg']
 writer = Writer(fps=40, bitrate=2000, codec='libx264',
                 extra_args=['-crf', '17', '-threads', '16', '-preset', 'ultrafast', '-tune', 'film'])
 ani.save(data + 'particle_trajectory.mp4', writer=writer)
+shutil.copy(data + 'particle_trajectory.mp4', 'particle_trajectory.mp4')
 print("Animation saved successfully.")

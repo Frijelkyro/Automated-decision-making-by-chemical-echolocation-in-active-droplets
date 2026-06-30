@@ -37,8 +37,8 @@ static_source_decay_rate = 0.0 #characteristic decay rate of the source
 advection=False #whether to include advection term in the chemical equation
 massive_particle = False #whether to include mass in the particle equation
 exit_radius = 20.0 #radius of the exit aroudn the target (static source)
-exit_wall_radius = 10.0 #radius for the leaky exit wall
-permeability = 0.0 #permeability of the exit wall (0 = no-flux, >0 = leaky)
+exit_wall_radius = 30.0 #radius for the leaky exit wall
+permeability = 0.99 #permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 # Simulation parameters
 dx = 1.0 #grid spacing
@@ -46,7 +46,7 @@ Lx = 100.0 #domain size
 Ly = 100.0 #domain size
 n_xbins = int(Lx/dx) #number of bins in x direction
 n_ybins = int(Ly/dx) #number of bins in y direction
-n_steps = 1000 #number of time steps
+n_steps = 100 #number of time steps
 dt = 1.0 * 10**(-3) #time step size
 gamma = (Dc * dt) / (dx ** 2) #gamma parameter
 time_loop = 100 #number of time loops
@@ -87,7 +87,7 @@ theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 
 emission_rate = 1.0  # droplets per second
-emitter_position = np.array([4.0, 82.0], dtype=np.float32)
+emitter_position = np.array([52.0, 14.0], dtype=np.float32)
 
 # All particles start at the same emitter location and activate at delayed birth times.
 p[:, 0, :] = emitter_position

@@ -119,6 +119,10 @@ def chemotaxis_force(position, t, c, maze, dx, Bp, active_mask=None):
         y_bin = int(np.rint(position[particle_id, t, 1] / dx))
         
         particle_force = np.zeros(2)
+        if 98 in (x_bin, y_bin):
+            print(particle_id)
+            print(x_bin)
+            print(y_bin)
                 
         if maze[x_bin, y_bin] != 0:
             particle_force[0] = Bp * (c[t+1, x_bin + 1, y_bin] - c[t+1, x_bin - 1, y_bin]) / (2.0 * dx)
@@ -457,6 +461,15 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times
                     velocity[particle_id, t + 1, :] = 0.0
                     theta[particle_id, t + 1] = theta[particle_id, t]
                     ang_velocity[particle_id, t + 1] = ang_velocity[particle_id, t]
+                    continue
+                px_bin = int(np.rint(position[particle_id, t, 0] / dx))
+                py_bin = int(np.rint(position[particle_id, t, 1] / dx))
+                if (maze[px_bin, py_bin] == 0 or 
+                    maze[px_bin + 1, py_bin] == 0 or maze[px_bin - 1, py_bin] == 0 or 
+                    maze[px_bin, py_bin + 1] == 0 or maze[px_bin, py_bin - 1] == 0):
+                    birth_steps[particle_id] = 99999999
+                    position[particle_id, t:, :] = np.nan
+                    velocity[particle_id, t:, :] = np.nan
                     continue
 
                 position[particle_id, t + 1, 0] = position[particle_id, t, 0] + (  dt * forces_self_propulsion[particle_id, 0] 
