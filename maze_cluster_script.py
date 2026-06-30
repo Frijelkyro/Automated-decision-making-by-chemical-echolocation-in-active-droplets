@@ -37,6 +37,8 @@ static_source_decay_rate = 0.0 #characteristic decay rate of the source
 advection=False #whether to include advection term in the chemical equation
 massive_particle = False #whether to include mass in the particle equation
 exit_radius = 20.0 #radius of the exit aroudn the target (static source)
+exit_wall_radius = 10.0 #radius for the leaky exit wall
+permeability = 0.0 #permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 # Simulation parameters
 dx = 1.0 #grid spacing
@@ -73,6 +75,7 @@ maze = maze_from_file('different_mazes/Ran_maze_size_prop_to_droplet.tsv')
 #maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
 wall = np.transpose(np.where(maze == 0))
 
+exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
 
 # Initial condition everywhere inside the grid
 c_initial = 0.0
@@ -109,7 +112,7 @@ parameter_dict={'Dc': Dc, 'Dp': Dp, 'Bp': Bp, 'moving_source_production_strength
                 'total_time': total_time, 'write_every': write_every, 'num_particles': num_particles, 'time_loop': time_loop,
                 'birth_steps': birth_steps, 'emitter_position': tuple(emitter_position),
                 'param_filename': param_filename, 'grid_filename': grid_filename, 'file_prefix_conc': file_prefix_conc,
-                'file_prefix_part': file_prefix_part, 'exit_radius': exit_radius}
+                'file_prefix_part': file_prefix_part, 'exit_radius': exit_radius, 'exit_wall_mask': exit_wall_mask, 'permeability': permeability}
 
 full_traj = np.empty((num_particles,0,15), dtype=np.float32)
 exit_times = np.zeros(num_particles)

@@ -1,4 +1,6 @@
 import numpy as np
+from maze_functions import get_exit_wall_mask, leaky_exit_wall
+
 
 # Define the initial conditions
 def initialize_c(c_initial,n_steps, maze):
@@ -92,14 +94,17 @@ def noflux(conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_n
     return conc
 
 #define noflux boundary condition for a maze
-def noflux_maze(conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_neg_indices, maze):
+def noflux_maze(conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_neg_indices, maze, regular_wall_mask=None):
     conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 1] = conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 2]
     conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1]] = conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] - 1]
 
     conc[t, y_diff_indices[:, 0] + 1, y_diff_indices[:, 1]] = conc[t, y_diff_indices[:, 0] + 2, y_diff_indices[:, 1]]
     conc[t, y_diff_neg_indices[:, 0], y_diff_neg_indices[:, 1]] = conc[t, y_diff_neg_indices[:, 0] - 1, y_diff_neg_indices[:, 1]]
 
-    conc[t, maze == 0] = 0.0
+    if regular_wall_mask is not None:
+        conc[t, regular_wall_mask] = 0.0
+    else:
+        conc[t, maze == 0] = 0.0
 
     return conc
 
@@ -308,11 +313,12 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times
     exit_radius = kwargs.get('exit_radius',20)
     birth_steps = kwargs.get('birth_steps', np.zeros(num_particles, dtype=int))
     emitter_position = np.array(kwargs.get('emitter_position',(0.0, 0.0)), dtype=np.float32)
+    permeability = kwargs.get('permeability', 0.0)
+    exit_wall_mask = kwargs.get('exit_wall_mask', None)
     
             
     nt, nx, ny = c.shape
     wall = maze == 0
-    wall_coords = np.transpose(np.where(maze == 0)) * dx
     x_diff = np.diff(maze, axis=1)
     y_diff = np.diff(maze, axis=0)
     
@@ -321,6 +327,30 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times
     y_diff_indices = np.transpose(np.where(y_diff == 1))
     x_diff_neg_indices = np.transpose(np.where(x_diff == -1))
     y_diff_neg_indices = np.transpose(np.where(y_diff == -1))
+    
+    # Filter boundary-transition indices and wall coordinates for leaky walls
+    if permeability > 0.0 and exit_wall_mask is not None:
+        in_exit_wall_x = exit_wall_mask[x_diff_indices[:, 0], x_diff_indices[:, 1]]
+        x_diff_indices_reg = x_diff_indices[~in_exit_wall_x]
+        
+        in_exit_wall_x_neg = exit_wall_mask[x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] + 1]
+        x_diff_neg_indices_reg = x_diff_neg_indices[~in_exit_wall_x_neg]
+        
+        in_exit_wall_y = exit_wall_mask[y_diff_indices[:, 0], y_diff_indices[:, 1]]
+        y_diff_indices_reg = y_diff_indices[~in_exit_wall_y]
+        
+        in_exit_wall_y_neg = exit_wall_mask[y_diff_neg_indices[:, 0] + 1, y_diff_neg_indices[:, 1]]
+        y_diff_neg_indices_reg = y_diff_neg_indices[~in_exit_wall_y_neg]
+        
+        regular_wall_mask = (maze == 0) & ~exit_wall_mask
+        wall_coords = np.transpose(np.where((maze == 0) & ~exit_wall_mask)) * dx
+    else:
+        x_diff_indices_reg = x_diff_indices
+        x_diff_neg_indices_reg = x_diff_neg_indices
+        y_diff_indices_reg = y_diff_indices
+        y_diff_neg_indices_reg = y_diff_neg_indices
+        regular_wall_mask = maze == 0
+        wall_coords = np.transpose(np.where(maze == 0)) * dx
     
     source = np.full((nt, nx, ny), 0.0, dtype=np.float32)
     ux = np.full((nt, nx, ny), 0.0, dtype=np.float32)
@@ -373,7 +403,11 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times
         c[t+1, 1:-1, 1:-1] = result
         
         # Noflux boundary condition for maze
-        noflux_maze(c, t+1, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_neg_indices, maze)
+        noflux_maze(c, t+1, x_diff_indices_reg, y_diff_indices_reg, x_diff_neg_indices_reg, y_diff_neg_indices_reg, maze, regular_wall_mask)
+        
+        # Leaky boundary condition for exit walls
+        if permeability > 0.0 and exit_wall_mask is not None:
+            c = leaky_exit_wall(c, t+1, exit_wall_mask, permeability, dt)
         
         # Forces
         forces_chemotaxis = chemotaxis_force(position, t, c, maze, dx, Bp, active_mask=active_mask)
