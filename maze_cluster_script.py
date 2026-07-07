@@ -14,7 +14,7 @@ from list_of_functions import *
 
 #Simulation parameters
 #beta = np.random.uniform(1,25)
-beta = -1
+beta = -1 # TODO -8
 
 Dc = 1.0*10**(2) #diffusion coefficient of the chemical
 Dp = 1.0*10**(0) #noise strength for the particle
@@ -35,7 +35,7 @@ static_source_production_strength = 0.0  # Strength of the static source
 static_source_decay_rate = 0.0 #characteristic decay rate of the source
 
 advection=False #whether to include advection term in the chemical equation
-massive_particle = False #whether to include mass in the particle equation
+massive_particle = False #whether to include mass in the particle equation  # TODO activate Mass
 exit_radius = 20.0 #radius of the exit aroudn the target (static source)
 
 # Simulation parameters
