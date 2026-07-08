@@ -149,3 +149,37 @@ def print_nearest_wall(maze, x, y, dx=1.0):
     print(f"Distance to point: {distance:.6f}")
 
     return (int(nearest[0]), int(nearest[1]), distance)
+
+
+def get_exit_wall_mask(maze, exit_position, dx, exit_wall_radius):
+    """Returns a boolean array of the same shape as maze.
+    Selects wall cells (maze == 0) that are on the outer boundary of the domain
+    and within exit_wall_radius of exit_position.
+    """
+    nx, ny = maze.shape
+    mask = np.zeros_like(maze, dtype=bool)
+    
+    boundary_mask = np.zeros_like(maze, dtype=bool)
+    boundary_mask[0, :] = True
+    boundary_mask[nx - 1, :] = True
+    boundary_mask[:, 0] = True
+    boundary_mask[:, ny - 1] = True
+    
+    x_exit, y_exit = exit_position
+    i_coords, j_coords = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    x_coords = i_coords * dx
+    y_coords = j_coords * dx
+    
+    dists = np.hypot(x_coords - x_exit, y_coords - y_exit)
+    mask[(maze == 0) & boundary_mask & (dists <= exit_wall_radius)] = True
+    return mask
+
+
+def leaky_exit_wall(conc, t, exit_wall_mask, permeability, dt):
+    """Applies a leaky boundary condition at the exit wall cells.
+    Reduces the concentration at time step t in the mask by dt * permeability.
+    """
+    factor = max(0.0, 1.0 - dt * permeability)
+    conc[t, exit_wall_mask] *= factor
+    return conc
+

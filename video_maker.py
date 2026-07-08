@@ -3,6 +3,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend suitable for saving files
 import matplotlib.pyplot as plt
 import seaborn as sns
+import shutil
 
 # Turn off interactive mode
 plt.ioff()
@@ -40,6 +41,7 @@ import sys
 import os
 import re
 from matplotlib.colors import Normalize
+import matplotlib.patches as patches
 import glob
 
 sys.path.append(os.path.join(os.getcwd(), 'trajectory_video'))
@@ -108,6 +110,41 @@ ax.plot(wall[:, 0], wall[:, 1], 's', markersize=6, color='#B8C7E5')
 source = np.array([90.2, 10.5])
 ax.text(source[0] - 4, source[1] - 2, 'No source', color='red', fontsize=15, ha='right', va='bottom')
 ax.text(source[0] + 4, source[1] + 8, 'Exit', color='k', fontsize=15, ha='right', va='bottom', backgroundcolor='white')
+# Green circle: radius = 20, thin line (linewidth=1 or 0.5)
+circle_green = plt.Circle((source[0], source[1]), radius=20, color='green', fill=False, linewidth=1)
+ax.add_patch(circle_green)
+
+# Red circle: radius = 30, thin line
+# circle_red = plt.Circle((source[0], source[1]), radius=20, color='red', fill=False, linewidth=1)
+# ax.add_patch(circle_red)
+
+zones = [(0, 35, 94, 98), (0, 4, 50, 98)]
+# Convert grid indices to spatial coordinates and add outlines to the plot
+for y1, y2, x1, x2 in zones:
+    # 1. Calculate the real-world corner coordinate (lower-left)
+    xy_corner = (x1 * 1, y1 * 1)
+    
+    # 2. Calculate the dimensions
+    width = (x2 - x1) * 1
+    height = (y2 - y1) * 1
+    
+    # 3. Create the rectangle patch
+    rect = patches.Rectangle(
+        xy_corner, 
+        width, 
+        height, 
+        linewidth=1,    # Thin outline
+        edgecolor='r',  # Red
+        facecolor='none',  # Transparent fill
+        linestyle='-'   # Solid line
+    )
+    
+    # 4. Add the patch to the axes
+    ax.add_patch(rect)
+
+# Ensure the aspect ratio is equal so the circles don't look like ovals
+ax.set_aspect('equal')
+
 
 start = np.array([5, 86])
 ax.text(start[0], start[1], 'Start', color='k', fontsize=15, ha='right', va='bottom', backgroundcolor='white', rotation='vertical')
@@ -184,4 +221,5 @@ Writer = animation.writers['ffmpeg']
 writer = Writer(fps=40, bitrate=2000, codec='libx264',
                 extra_args=['-crf', '17', '-threads', '16', '-preset', 'ultrafast', '-tune', 'film'])
 ani.save(data + 'particle_trajectory.mp4', writer=writer)
+shutil.copy(data + 'particle_trajectory.mp4', 'particle_trajectory.mp4')
 print("Animation saved successfully.")
