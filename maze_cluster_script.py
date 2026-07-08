@@ -37,7 +37,7 @@ static_source_decay_rate = 0.0 #characteristic decay rate of the source
 advection=False #whether to include advection term in the chemical equation
 massive_particle = False #whether to include mass in the particle equation
 exit_radius = 20.0 #radius of the exit aroudn the target (static source)
-exit_wall_radius = 30.0 #radius for the leaky exit wall
+exit_wall_radius = 20.0 #radius for the leaky exit wall
 permeability = 0.99 #permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 # Simulation parameters
@@ -80,14 +80,19 @@ exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 10 # Number of particles
+num_particles = 100 # Number of particles
+emission_rate = 0.5 # droplets per second
+num_particles = int(100 * emission_rate)
+print(emission_rate)
+print(num_particles)
+# emitter_position = np.array([4, 82], dtype=np.float32) 
+emitter_position = np.array([52.0, 14.0], dtype=np.float32)
+
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 
-emission_rate = 1.0  # droplets per second
-emitter_position = np.array([52.0, 14.0], dtype=np.float32)
 
 # All particles start at the same emitter location and activate at delayed birth times.
 p[:, 0, :] = emitter_position
@@ -115,7 +120,7 @@ parameter_dict={'Dc': Dc, 'Dp': Dp, 'Bp': Bp, 'moving_source_production_strength
                 'file_prefix_part': file_prefix_part, 'exit_radius': exit_radius, 'exit_wall_mask': exit_wall_mask, 'permeability': permeability}
 
 full_traj = np.empty((num_particles,0,15), dtype=np.float32)
-exit_times = np.zeros(num_particles)
+exit_times = np.full(num_particles, -1, dtype=int) # Using -1 as a 'did not exit' flag
 for i in range(time_loop):
     conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep = chemical_solver(conc, p, theta, v, omega, maze, exit_times, start_step=i*n_steps, **parameter_dict)
     if exit:
@@ -163,9 +168,15 @@ if not os.path.isfile(filename2):
     # If the file doesn't exist, write the header
     with open(filename2, 'w') as f:
         f.write("ExitTime Beta JobID ParticleID\n")
-
+        
 # Append the data to the file
 with open(filename2, 'a') as f:
     for particle_id in range(num_particles):
-        f.write(f"{(exit_times[particle_id]-birth_steps[particle_id]) *dt} {beta} {job_id} {particle_id}\n")
-    
+        # Check if the particle actually reached the exit
+        if exit_times[particle_id] == -1:
+            # Particle never finished: output 'inf' or a distinct placeholder
+            f.write(f"inf {beta} {job_id} {particle_id}\n")
+        else:
+            # Particle finished: compute positive time elapsed from birth to exit
+            duration = (exit_times[particle_id] - birth_steps[particle_id]) * dt
+            f.write(f"{duration} {beta} {job_id} {particle_id}\n")

@@ -1,3 +1,403 @@
+--------------- master_run.sh -----------
+#!/bin/bash
+mkdir --parents ./output/videos; 
+emission_rates=("0.5" "1" "2" "4" "8")
+#Iterate through the array and apply the operations
+for item in "${emission_rates[@]}"; do
+    # N=1
+    # mkdir --parents ./output/"$N"_particles; 
+    mkdir --parents ./output/"$item"_emission_rate; 
+    # sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $N # Number of particles/" maze_cluster_script.py
+    sed -i -E "s/^emission_rate = [0-9.]+(\s*#.*)?\$/emission_rate = $item # droplets per second/" maze_cluster_script.py
+    for i in {1..2}; do
+        rm data/conc*.txt
+        rm data/part*.txt
+        python maze_cluster_script.py
+        python video_maker.py
+        printf -v padded "%02d" $i
+    #    cp data/particle_trajectory.mp4 "output/videos/"$N"_particles_trajectory_$padded.mp4"
+        cp data/particle_trajectory.mp4 "output/videos/"$item"_em-rate_trajectory_$padded.mp4"
+    done
+    # mv data/exit_times.txt ./output/"$N"_particles
+    mv data/exit_times.txt ./output/"$items"_particles
+done
+
+
+--------------- maze_cluster_script.py -----------
+#%reload_ext autoreload
+#%autoreload 2
+
+import matplotlib.pyplot as plt
+import os
+import sys
+import numpy as np
+from maze_functions import *
+from list_of_functions import *
+
+# This script is used to run the chemical solver on a maze with one particle.
+# It initializes the parameters, generates a maze, and runs the simulation.
+
+
+#Simulation parameters
+#beta = np.random.uniform(1,25)
+beta = -1
+
+Dc = 1.0*10**(2) #diffusion coefficient of the chemical
+Dp = 1.0*10**(0) #noise strength for the particle
+Bp = beta*10**(4) #chemotactic sensitivity
+moving_source_production_strength = 1.0 #strength of the source
+moving_source_decay_rate = 0.0 #characteristic decay rate of the source
+global_decay_strength = 0.0 #evaporation of chemical from environment
+self_propulsion_speed = 0.0 #self-propulsion speed of the particle 
+sp_decay_rate = 0.0 #characteristic decay rate of the self-propulsion
+self_propulsion_frequency = 0.0 #self-propulsion angular velocity of the particle
+Dr = 3.0 #rotational diffusion coefficient of the particle 
+M = 6.0*10**(-2) #mass of the particle
+J = 2.0*10**(-2) #moment of inertia of the particle
+
+epsilon_LJ = 0.10  # Lennard-Jones potential parameter for interaction between particles
+static_source_position = (90.2, 10.5)  # Position of the static source
+static_source_production_strength = 0.0  # Strength of the static source
+static_source_decay_rate = 0.0 #characteristic decay rate of the source
+
+advection=False #whether to include advection term in the chemical equation
+massive_particle = False #whether to include mass in the particle equation
+exit_radius = 20.0 #radius of the exit aroudn the target (static source)
+exit_wall_radius = 20.0 #radius for the leaky exit wall
+permeability = 0.99 #permeability of the exit wall (0 = no-flux, >0 = leaky)
+
+# Simulation parameters
+dx = 1.0 #grid spacing
+Lx = 100.0 #domain size
+Ly = 100.0 #domain size
+n_xbins = int(Lx/dx) #number of bins in x direction
+n_ybins = int(Ly/dx) #number of bins in y direction
+n_steps = 100 #number of time steps
+dt = 1.0 * 10**(-3) #time step size
+gamma = (Dc * dt) / (dx ** 2) #gamma parameter
+time_loop = 100 #number of time loops
+time = np.arange(0, time_loop*n_steps, 1)*dt
+time = time[np.newaxis,:]
+total_time = dt*time_loop*n_steps #total time of the simulation
+write_every = 100 #write output after every this many time steps
+
+# Data directory
+data = 'data' # for linux
+#data = 'D:\maze_data' # for windows
+# Check if data directory exists, if not, create it
+if not os.path.exists(data):
+    os.makedirs(data)
+param_filename = data + '/param.txt'
+grid_filename = data + '/grid.txt'
+file_prefix_conc = data + '/conc'
+file_prefix_part = data + '/part'
+
+
+# Generate a maze
+#maze = box_maze(n_xbins, n_ybins)
+
+# maze = maze_from_file('different_mazes/empty_box.tsv')
+maze = maze_from_file('different_mazes/Ran_maze_size_prop_to_droplet.tsv')
+#maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
+wall = np.transpose(np.where(maze == 0))
+
+exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
+
+# Initial condition everywhere inside the grid
+c_initial = 0.0
+
+num_particles = 100 # Number of particles
+emission_rate = 1 # droplets per second
+num_particles = int(100 * emission_rate)
+print(emission_rate)
+print(num_particles)
+# emitter_position = np.array([4, 82], dtype=np.float32) 
+emitter_position = np.array([52.0, 14.0], dtype=np.float32)
+
+p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
+v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
+theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
+omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
+
+
+# All particles start at the same emitter location and activate at delayed birth times.
+p[:, 0, :] = emitter_position
+v[:, 0, :] = 0.0
+theta[:, 0] = np.random.uniform(0, 2.0 * np.pi, size=num_particles)
+omega[:, 0] = 0.0
+
+birth_steps = np.array([int(round(i / emission_rate / dt)) for i in range(num_particles)], dtype=int)
+print(f"Emitter position: {emitter_position}, birth steps: {birth_steps}")
+
+# Create new map and display the result of chemical diffusion
+conc = initialize_c(c_initial, n_steps, maze)
+#conc = initialize_c_from_file(c_initial, n_steps, maze, data +'/conc_Ran_maze_1x.txt')
+
+# build a parameter dictionary
+parameter_dict={'Dc': Dc, 'Dp': Dp, 'Bp': Bp, 'moving_source_production_strength': moving_source_production_strength, 'sp_decay_rate': sp_decay_rate,
+                'moving_source_decay_rate': moving_source_decay_rate, 'static_source_decay_rate': static_source_decay_rate, 'global_decay_strength': global_decay_strength,
+                'self_propulsion_speed': self_propulsion_speed, 'self_propulsion_frequency': self_propulsion_frequency,
+                'Dr': Dr, 'M': M, 'J': J, 'epsilon_LJ': epsilon_LJ, 'static_source_position': static_source_position,
+                'static_source_production_strength': static_source_production_strength, 'advection': advection, 'massive_particle': massive_particle,
+                'dx': dx, 'Lx': Lx, 'Ly': Ly, 'n_xbins': n_xbins, 'n_ybins': n_ybins, 'n_steps': n_steps, 'dt': dt, 'gamma': gamma,
+                'total_time': total_time, 'write_every': write_every, 'num_particles': num_particles, 'time_loop': time_loop,
+                'birth_steps': birth_steps, 'emitter_position': tuple(emitter_position),
+                'param_filename': param_filename, 'grid_filename': grid_filename, 'file_prefix_conc': file_prefix_conc,
+                'file_prefix_part': file_prefix_part, 'exit_radius': exit_radius, 'exit_wall_mask': exit_wall_mask, 'permeability': permeability}
+
+full_traj = np.empty((num_particles,0,15), dtype=np.float32)
+exit_times = np.full(num_particles, -1, dtype=int) # Using -1 as a 'did not exit' flag
+for i in range(time_loop):
+    conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep = chemical_solver(conc, p, theta, v, omega, maze, exit_times, start_step=i*n_steps, **parameter_dict)
+    if exit:
+        current_time = np.repeat(time[:, i*n_steps: exit_timestep+1, np.newaxis], num_particles, axis=0)
+        current_traj = np.concatenate((current_time, p[:,0: exit_timestep%n_steps+1,:], 
+                                       theta[:, 0: exit_timestep%n_steps+1, np.newaxis], v[:,0: exit_timestep%n_steps+1,:], 
+                                       omega[:, 0: exit_timestep%n_steps+1, np.newaxis], f_sp[:,0: exit_timestep%n_steps+1,:],
+                                       f_chem[:,0: exit_timestep%n_steps+1,:], f_int[:,0: exit_timestep%n_steps+1,:],
+                                       f_wall[:,0: exit_timestep%n_steps+1,:]), axis=-1)
+        full_traj = np.append(full_traj, current_traj, axis=1)
+        conc[-1,:,:] = conc[exit_timestep % n_steps,:,:]
+        break
+    current_time = np.repeat(time[:, i*n_steps: (i+1)*n_steps, np.newaxis], num_particles, axis=0)
+    current_traj = np.concatenate((current_time, p, theta[:, :, np.newaxis], v, omega[:, :, np.newaxis],
+                                   f_sp, f_chem, f_int, f_wall), axis=-1)
+    full_traj = np.append(full_traj, current_traj, axis=1)
+    conc[0, :, :] = conc[-1, :, :]
+    p[:, 0, :] = p[:,-1,:]
+    theta[:, 0] = theta[:,-1]
+    omega[:, 0] = omega[:,-1]
+    v[:, 0, :] = v[:,-1,:]
+
+
+# Assuming you have column names
+column_names = ['Time', 'X', 'Y', 'Theta', 'VX', 'VY', 'Omega', 'f_spx', 'f_spy', 'f_chemx', 'f_chemy', 'f_intx', 'f_inty', 'f_wallx', 'f_wally']
+
+
+# Save the full trajectory with a header
+#np.savetxt(data + '/full_traj.txt', full_traj[0], fmt='%.8f', header=' '.join(column_names), comments='')
+
+
+# Get the job ID from the command line arguments
+job_id = 1 #sys.argv[1]
+
+# Create the filename using the job ID
+filename1 = data + f'/full_traj_{job_id}.txt'
+# Save the full trajectory with a header
+full_traj_write_every = 1
+if exit:
+    np.savetxt(filename1, full_traj[0][::full_traj_write_every], fmt='%.4f', header=' '.join(column_names), comments='')
+
+filename2 = data + '/exit_times.txt'
+# Check if the file exists
+if not os.path.isfile(filename2):
+    # If the file doesn't exist, write the header
+    with open(filename2, 'w') as f:
+        f.write("ExitTime Beta JobID ParticleID\n")
+        
+# Append the data to the file
+with open(filename2, 'a') as f:
+    for particle_id in range(num_particles):
+        # Check if the particle actually reached the exit
+        if exit_times[particle_id] == -1:
+            # Particle never finished: output 'inf' or a distinct placeholder
+            f.write(f"inf {beta} {job_id} {particle_id}\n")
+        else:
+            # Particle finished: compute positive time elapsed from birth to exit
+            duration = (exit_times[particle_id] - birth_steps[particle_id]) * dt
+            f.write(f"{duration} {beta} {job_id} {particle_id}\n")
+
+
+--------------- maze_functions.py -----------
+# Define the maze functions
+
+# Import the necessary libraries
+import numpy as np
+import random
+
+def random_maze(width, height):
+    maze = np.ones((height, width), dtype=int)
+
+    def is_valid(x, y):
+        return 1 <= x < width - 1 and 1 <= y < height - 1
+
+    def is_wall(x, y):
+        return maze[y][x] == 1
+
+    def can_carve(x, y):
+        return is_valid(x, y) and is_wall(x, y)
+
+    def carve(x, y):
+        maze[y][x] = 0
+
+    def carve_path(x1, y1, x2, y2):
+        for y in range(min(y1, y2), max(y1, y2) + 1):
+            for x in range(min(x1, x2), max(x1, x2) + 1):
+                carve(x, y)
+
+    stack = [(2, 2)]
+    maze[2][2] = 0
+
+    while stack:
+        x, y = stack[-1]
+        neighbors = []
+
+        for dx, dy in [(4, 0), (-4, 0), (0, 4), (0, -4)]:
+            nx, ny = x + dx, y + dy
+            if can_carve(nx, ny):
+                neighbors.append((nx, ny))
+
+        if neighbors:
+            nx, ny = random.choice(neighbors)
+            carve_path(x, y, nx, ny)
+            stack.append((nx, ny))
+        else:
+            stack.pop()
+
+    # Fill first and last rows with 0s
+    maze[0, :] = 0
+    maze[height - 1, :] = 0
+
+    # Fill first and last columns with 0s
+    maze[:, 0] = 0
+    maze[:, width - 1] = 0
+
+    return maze
+
+
+#define a maze within a single box
+def box_maze(nx, ny):
+    # Initialize solution: the grid of u(k, i, j)
+    m = np.full((nx, ny), 1)
+
+    # Set the boundary walls
+    m[0, :] = 0
+    m[:, 0] = 0
+    m[-1, :] = 0
+    m[:, -1] = 0
+
+    return m
+
+#define a custom maze
+def custom_maze(nx, ny):
+    # Initialize solution: the grid of u(k, i, j)
+    m = np.full((nx, ny), 1)
+
+    # Set the boundary walls
+    m[0, :] = 0
+    m[:, 0] = 0
+    m[-1, :] = 0
+    m[:, -1] = 0
+    
+    #add extra walls
+    m[100:, 100] = 0
+    m[100, 100:] = 0    
+    
+
+    return m
+
+#maze from a file
+def maze_from_file(file_path):
+    # Read the TSV file into a 2D NumPy array
+    data = np.loadtxt(file_path, delimiter="\t", dtype=int)
+    
+    # Invert the values (0s to 1s and 1s to 0s)
+    inverted_data = 1 - data
+    
+    # Rotate the matrix by 90 degrees clockwise
+    rotated_data = np.rot90(inverted_data, k=-1)
+    
+    return rotated_data
+
+
+#function to load concentrations from a file
+def load_c_from_file(maze, filename):
+    nx=maze.shape[0]
+    ny=maze.shape[1]
+    c = np.loadtxt(filename, skiprows=3).reshape((nx, ny))
+    return c
+
+
+#function to load trajectory from a file
+def load_traj_from_file(filename):
+    traj = np.loadtxt(filename, skiprows=1)
+    return traj
+
+
+def print_nearest_wall(maze, x, y, dx=1.0):
+    """Find and print the nearest wall cell to the point (x, y).
+
+    - `maze` : 2D numpy array where wall cells equal 0.
+    - `x, y` : Cartesian coordinates in the same units as `dx`.
+    - `dx` : grid spacing (default 1.0).
+
+    Prints the nearest wall cell as (row, col), its approximate coordinates,
+    and the Euclidean distance from (x,y) to that wall cell in the same units
+    as the inputs.
+    Returns a tuple `(row, col, distance)`.
+    """
+    walls = np.argwhere(maze == 0)
+    if walls.size == 0:
+        print("No walls found in the maze.")
+        return None
+
+    # Interpret wall indices as (row, col) -> (y_index, x_index)
+    gx = x / dx
+    gy = y / dx
+
+    # Use wall cell centers for coordinate conversion
+    cell_centers_x = walls[:, 1] + 0.5
+    cell_centers_y = walls[:, 0] + 0.5
+    dists = np.hypot(cell_centers_x - gx, cell_centers_y - gy)
+    idx = int(np.argmin(dists))
+    nearest = walls[idx]
+    distance = float(dists[idx] * dx)
+
+    coord_x = cell_centers_x[idx] * dx
+    coord_y = cell_centers_y[idx] * dx
+    print(f"Closest wall at grid (row,col): {tuple(nearest)}")
+    print(f"Approx. wall coordinates: x={coord_x:.4f}, y={coord_y:.4f}")
+    print(f"Distance to point: {distance:.6f}")
+
+    return (int(nearest[0]), int(nearest[1]), distance)
+
+
+def get_exit_wall_mask(maze, exit_position, dx, exit_wall_radius):
+    """Returns a boolean array of the same shape as maze.
+    Selects wall cells (maze == 0) that are on the outer boundary of the domain
+    and within exit_wall_radius of exit_position.
+    """
+    nx, ny = maze.shape
+    mask = np.zeros_like(maze, dtype=bool)
+    
+    boundary_mask = np.zeros_like(maze, dtype=bool)
+    boundary_mask[0, :] = True
+    boundary_mask[nx - 1, :] = True
+    boundary_mask[:, 0] = True
+    boundary_mask[:, ny - 1] = True
+    
+    x_exit, y_exit = exit_position
+    i_coords, j_coords = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    x_coords = i_coords * dx
+    y_coords = j_coords * dx
+    
+    dists = np.hypot(x_coords - x_exit, y_coords - y_exit)
+    mask[(maze == 0) & boundary_mask & (dists <= exit_wall_radius)] = True
+    return mask
+
+
+def leaky_exit_wall(conc, t, exit_wall_mask, permeability, dt):
+    """Applies a leaky boundary condition at the exit wall cells.
+    Reduces the concentration at time step t in the mask by dt * permeability.
+    """
+    factor = max(0.0, 1.0 - dt * permeability)
+    conc[t, exit_wall_mask] *= factor
+    return conc
+
+
+
+
+--------------- list_of_functions.py -----------
 import numpy as np
 from maze_functions import get_exit_wall_mask, leaky_exit_wall
 
@@ -459,6 +859,11 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times
                 px_bin = int(np.rint(position[particle_id, t, 0] / dx))
                 py_bin = int(np.rint(position[particle_id, t, 1] / dx))
 
+                if exit_times[particle_id]!= -1 and (maze[px_bin, py_bin] == 0 or maze[px_bin + 1, py_bin] == 0 or maze[px_bin - 1, py_bin] == 0 or 
+                    maze[px_bin, py_bin + 1] == 0 or maze[px_bin, py_bin - 1] == 0):
+                    exit_times[particle_id] = -2   # mark as dead
+                    continue
+
                 position[particle_id, t + 1, 0] = position[particle_id, t, 0] + (  dt * forces_self_propulsion[particle_id, 0] 
                                                                                 + dt * forces_chemotaxis[particle_id, 0] 
                                                                                 + dt * forces_interaction[particle_id, :, 0].sum() 
@@ -496,3 +901,6 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times
             break
             
     return c, position, theta, velocity, ang_velocity, f_sp, f_chem, f_int, f_wall, exit, exit_timestep
+
+
+
