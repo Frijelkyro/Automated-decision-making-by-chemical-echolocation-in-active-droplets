@@ -4,6 +4,7 @@
 import numpy as np
 import random
 
+
 def random_maze(width, height):
     maze = np.ones((height, width), dtype=int)
 
@@ -54,7 +55,7 @@ def random_maze(width, height):
     return maze
 
 
-#define a maze within a single box
+# define a maze within a single box
 def box_maze(nx, ny):
     # Initialize solution: the grid of u(k, i, j)
     m = np.full((nx, ny), 1)
@@ -67,7 +68,8 @@ def box_maze(nx, ny):
 
     return m
 
-#define a custom maze
+
+# define a custom maze
 def custom_maze(nx, ny):
     # Initialize solution: the grid of u(k, i, j)
     m = np.full((nx, ny), 1)
@@ -77,37 +79,37 @@ def custom_maze(nx, ny):
     m[:, 0] = 0
     m[-1, :] = 0
     m[:, -1] = 0
-    
-    #add extra walls
+
+    # add extra walls
     m[100:, 100] = 0
-    m[100, 100:] = 0    
-    
+    m[100, 100:] = 0
 
     return m
 
-#maze from a file
+
+# maze from a file
 def maze_from_file(file_path):
     # Read the TSV file into a 2D NumPy array
     data = np.loadtxt(file_path, delimiter="\t", dtype=int)
-    
+
     # Invert the values (0s to 1s and 1s to 0s)
     inverted_data = 1 - data
-    
+
     # Rotate the matrix by 90 degrees clockwise
     rotated_data = np.rot90(inverted_data, k=-1)
-    
+
     return rotated_data
 
 
-#function to load concentrations from a file
+# function to load concentrations from a file
 def load_c_from_file(maze, filename):
-    nx=maze.shape[0]
-    ny=maze.shape[1]
+    nx = maze.shape[0]
+    ny = maze.shape[1]
     c = np.loadtxt(filename, skiprows=3).reshape((nx, ny))
     return c
 
 
-#function to load trajectory from a file
+# function to load trajectory from a file
 def load_traj_from_file(filename):
     traj = np.loadtxt(filename, skiprows=1)
     return traj
@@ -158,18 +160,18 @@ def get_exit_wall_mask(maze, exit_position, dx, exit_wall_radius):
     """
     nx, ny = maze.shape
     mask = np.zeros_like(maze, dtype=bool)
-    
+
     boundary_mask = np.zeros_like(maze, dtype=bool)
     boundary_mask[0, :] = True
     boundary_mask[nx - 1, :] = True
     boundary_mask[:, 0] = True
     boundary_mask[:, ny - 1] = True
-    
+
     x_exit, y_exit = exit_position
-    i_coords, j_coords = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    i_coords, j_coords = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
     x_coords = i_coords * dx
     y_coords = j_coords * dx
-    
+
     dists = np.hypot(x_coords - x_exit, y_coords - y_exit)
     mask[(maze == 0) & boundary_mask & (dists <= exit_wall_radius)] = True
     return mask
@@ -182,4 +184,3 @@ def leaky_exit_wall(conc, t, exit_wall_mask, permeability, dt):
     factor = max(0.0, 1.0 - dt * permeability)
     conc[t, exit_wall_mask] *= factor
     return conc
-
