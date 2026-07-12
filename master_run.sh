@@ -87,11 +87,10 @@ for N in 1; do
         if [ $? -ne 0 ]; then
             # Calling the recovery function for Section 1
             process_crash_recovery "./output/${N}_particles/crash_logs/${padded}/data"
-        else
-            if [ $i -le 5 ]; then
-                python video_maker.py
-                cp data/particle_trajectory.mp4 "output/videos/${N}_particles_trajectory_$padded.mp4"
-            fi
+        fi
+        if [ $i -le 5 ]; then
+            python video_maker.py
+            cp data/particle_trajectory.mp4 "output/videos/${N}_particles_trajectory_$padded.mp4"
         fi
         if [ $i -eq 25 ]; then
             echo "interation number: 25"
