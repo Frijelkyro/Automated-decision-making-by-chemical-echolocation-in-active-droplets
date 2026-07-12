@@ -50,7 +50,7 @@ time_loop = 500  # number of time loops
 time = np.arange(0, time_loop * n_steps, 1) * dt
 time = time[np.newaxis, :]
 total_time = dt * time_loop * n_steps  # total time of the simulation
-write_every = 100000  # write output after every this many time steps
+write_every = 100  # write output after every this many time steps
 
 # Data directory
 data = "data"  # for linux
@@ -84,7 +84,7 @@ death_zone_map = exit_zone_map
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 25  # Number of particles
+num_particles = 1 # Number of particles
 emission_rate = 0.25  # droplets per second
 
 # Calculate arrays safely using the master num_particles variable

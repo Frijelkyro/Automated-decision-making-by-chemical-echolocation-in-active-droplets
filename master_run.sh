@@ -78,7 +78,7 @@ for N in 1; do
     # Update the python script with the current particle count
     sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $N # Number of particles/" maze_cluster_script.py
     
-    for i in {1..50}; do
+    for i in {1..3}; do
         printf -v padded "%02d" $i
         rm -f data/conc*.txt data/part*.txt
         
@@ -115,7 +115,7 @@ for ER in 0.5 1 2 4 10; do
     sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $CALCULATED_PARTICLES # Number of particles/" maze_cluster_script.py
     sed -i -E "s/^emission_rate = [0-9.]+(\s*#.*)?\$/emission_rate = $ER # droplets per second/" maze_cluster_script.py
     
-    for i in {1..25}; do
+    for i in {1..3}; do
         printf -v padded "%02d" $i
         rm -f data/conc*.txt data/part*.txt
         
