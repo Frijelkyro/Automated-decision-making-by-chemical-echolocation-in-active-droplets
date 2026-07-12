@@ -188,10 +188,6 @@ def chemotaxis_force(position, t, c, maze, dx, Bp, active_mask=None):
         y_bin = int(np.rint(position[particle_id, t, 1] / dx))
 
         particle_force = np.zeros(2)
-        if 98 in (x_bin, y_bin):
-            print(particle_id)
-            print(x_bin)
-            print(y_bin)
 
         if maze[x_bin, y_bin] != 0:
             particle_force[0] = (
@@ -393,22 +389,18 @@ def write_particles(
                 )
 
 
-def exit_condition(
-    position, num_particles, timestep, n_steps, exit_times, exit_point, exit_radius
-):
-    # exit_times = np.zeros(num_particles)
-    t = timestep % n_steps
-    exit = np.zeros(num_particles)
-    for particle_id in range(num_particles):
-        dist = np.linalg.norm(position[particle_id, t] - exit_point)
-        if exit_times[particle_id] != 0.0:
-            exit[particle_id] = 1
-        else:
-            if dist < exit_radius:
-                print("particle close to exit!")
-                exit_times[particle_id] = timestep
-                exit[particle_id] = 1
-    return np.sum(exit) == num_particles
+def exit_condition(timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker):
+    # A particle exits if it lands on a True cell in the exit map,
+    # hasn't exited yet, and isn't dead.
+    new_exits = exit_zone_map[px_bins, py_bins] & (exit_times == 0.0) & ~dead_tracker
+
+    if np.any(new_exits):
+        print(f"{np.sum(new_exits)} particle(s) reached the exit region!")
+        exit_times[new_exits] = timestep
+
+    # Check if all particles have successfully exited or died
+    has_exited_or_died = (exit_times > 0.0) | dead_tracker
+    return np.all(has_exited_or_died)
 
 
 def chemical_solver(
@@ -461,6 +453,7 @@ def chemical_solver(
     active_mask = kwargs.get("active_mask", np.zeros(num_particles, dtype=bool))
     dead_tracker = kwargs.get("dead_tracker", np.zeros(num_particles, dtype=bool))
     death_zone_map = kwargs.get("death_zone_map", np.zeros_like(maze, dtype=bool))
+    exit_zone_map = kwargs.get("exit_zone_map", np.zeros_like(maze, dtype=bool))
     emitter_position = np.array(
         kwargs.get("emitter_position", (0.0, 0.0)), dtype=np.float32
     )
@@ -755,13 +748,7 @@ def chemical_solver(
             )
 
         if exit_condition(
-            position,
-            num_particles,
-            timestep,
-            n_steps,
-            exit_times,
-            exit_point=static_source_position,
-            exit_radius=exit_radius,
+            timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker
         ):
             write_concentration(file_prefix_conc, c, [timestep], n_steps)
             write_particles(

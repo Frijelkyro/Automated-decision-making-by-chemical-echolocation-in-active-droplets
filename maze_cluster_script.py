@@ -11,23 +11,20 @@ from list_of_functions import *
 # This script is used to run the chemical solver on a maze with one particle.
 # It initializes the parameters, generates a maze, and runs the simulation.
 
+beta = -8
 
-# Simulation parameters
-# beta = np.random.uniform(1,25)
-beta = -8  # -1 before,-8 pnas fig 3a (supp line 96)
-
-Dc = 2.0 * 10 ** (2)  # diffusion coefficient of the chemical
-Dp = 1.0 * 10 ** (0)  # noise strength for the particle
-Bp = beta * 10 ** (4)  # chemotactic sensitivity
+Dc = 2.0 * 10 ** (2)  # diffusion coefficient of the chemical (100)
+Dp = 1.0 * 10 ** (0)  # noise strength for the particle (0.1)
+Bp = beta * 10 ** (4)  # chemotactic sensitivity (CR: -16000, CA:16000)
 moving_source_production_strength = 1.0  # strength of the source
-moving_source_decay_rate = 0.0  # characteristic decay rate of the source
+moving_source_decay_rate = 1 / 70  # characteristic decay rate of the source
 global_decay_strength = 0.0  # evaporation of chemical from environment
-self_propulsion_speed = 0.0  # self-propulsion speed of the particle
+self_propulsion_speed = 0.0 * 10 ** (1)  # self-propulsion speed of the particle (1.0)
 sp_decay_rate = 0.0  # characteristic decay rate of the self-propulsion
 self_propulsion_frequency = 0.0  # self-propulsion angular velocity of the particle
-Dr = 3.0  # rotational diffusion coefficient of the particle
-M = 6.0 * 10 ** (-2)  # mass of the particle
-J = 2.0 * 10 ** (-2)  # moment of inertia of the particle
+Dr = 3.0  # rotational diffusion coefficient of the particle (1.0)
+M = 1.0 * 10 ** (-1)  # mass of the particle (0.001, 0.2)
+J = 4.0 * 10 ** (-2)  # moment of inertia of the particle (0.001, 0.06)
 
 epsilon_LJ = 0.10  # Lennard-Jones potential parameter for interaction between particles
 static_source_position = (90.2, 10.5)  # Position of the static source
@@ -35,12 +32,10 @@ static_source_production_strength = 0.0  # Strength of the static source
 static_source_decay_rate = 0.0  # characteristic decay rate of the source
 
 advection = False  # whether to include advection term in the chemical equation
-massive_particle = (
-    True  # whether to include mass in the particle equation  # activate Mass
-)
+massive_particle = True  # whether to include mass in the particle equation
 exit_radius = 20.0  # radius of the exit aroudn the target (static source)
 exit_wall_radius = 20.0  # radius for the leaky exit wall
-permeability = 0.4  # permeability of the exit wall (0 = no-flux, >0 = leaky)
+permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 # Simulation parameters
 dx = 1.0  # grid spacing
@@ -48,14 +43,14 @@ Lx = 100.0  # domain size
 Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
-n_steps = 10  # number of time steps
-dt = 0.5 * 10 ** (-3)  # time step size
+n_steps = 4000  # number of time steps 40000
+dt = 1 * 10 ** (-3)  # time step size
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
-time_loop = 10  # 8000 #number of time loops
+time_loop = 500  # number of time loops
 time = np.arange(0, time_loop * n_steps, 1) * dt
 time = time[np.newaxis, :]
 total_time = dt * time_loop * n_steps  # total time of the simulation
-write_every = 100  # write output after every this many time steps
+write_every = 100000  # write output after every this many time steps
 
 # Data directory
 data = "data"  # for linux
@@ -78,15 +73,19 @@ maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet.tsv")
 wall = np.transpose(np.where(maze == 0))
 death_zone_map = np.zeros_like(maze, dtype=bool)
 # exit at [90.2, 10.5]
-death_zone_map[94:98, 0:35] = True
-death_zone_map[50:98, 0:4] = True
+# death_zone_map[94:98, 0:35] = True
+# death_zone_map[50:98, 0:4] = True
+X, Y = np.indices(maze.shape)
+cx, cy = np.rint(np.array(static_source_position) / dx)
+exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
+death_zone_map = exit_zone_map
 
 
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 10  # Number of particles
-emission_rate = 1.0  # droplets per second
+num_particles = 25  # Number of particles
+emission_rate = 0.25  # droplets per second
 
 # Calculate arrays safely using the master num_particles variable
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
@@ -151,6 +150,7 @@ parameter_dict = {
     "active_mask": active_mask,
     "dead_tracker": dead_tracker,
     "death_zone_map": death_zone_map,
+    "exit_zone_map": exit_zone_map,
     "emitter_position": tuple(emitter_position),
     "param_filename": param_filename,
     "grid_filename": grid_filename,
@@ -274,5 +274,5 @@ if not os.path.isfile(filename2):
 with open(filename2, "a") as f:
     for particle_id in range(num_particles):
         f.write(
-            f"{max(exit_times[particle_id]-birth_steps[particle_id] *dt, -1)} {beta} {job_id} {particle_id}\n"
+            f"{max((exit_times[particle_id]-birth_steps[particle_id]) *dt, -1)} {beta} {job_id} {particle_id}\n"
         )
