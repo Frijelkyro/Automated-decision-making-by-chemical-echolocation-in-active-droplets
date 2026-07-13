@@ -1,32 +1,167 @@
 --------------- master_run.sh -----------
 #!/bin/bash
-mkdir --parents ./output/videos; 
-emission_rates=("0.25" "0.5" "1" "2" "4" "8")
-# particle_numbers=("1" "2" "4" "10") 
-# Iterate through the array and apply the operations
-# for N in "${particle_numbers[@]}"; do
-for item in "${emission_rates[@]}"; do
-    # mkdir --parents ./output/"$N"_particles; 
-    mkdir --parents ./output/"$item"_emission-rate; 
-    # sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $N # Number of particles/" maze_cluster_script.py
-    sed -i -E "s/^emission_rate = [0-9.]+(\s*#.*)?\$/emission_rate = $item # droplets per second/" maze_cluster_script.py
-    for i in {1..2}; do
-        rm data/conc*.txt
-        rm data/part*.txt
-        python maze_cluster_script.py
-        python video_maker.py
-        printf -v padded "%02d" $i
-    #    cp data/particle_trajectory.mp4 "output/videos/"$N"_particles_trajectory_$padded.mp4"
-        cp data/particle_trajectory.mp4 "output/videos/"$item"_em-rate_trajectory_$padded.mp4"
+
+# =====================================================================
+# REUSABLE RECOVERY FUNCTION (Handles Crash Logs & Data Extraction)
+# =====================================================================
+# TODO Fix Video saving Issue
+process_crash_recovery() {
+    local target_log_dir="$1"   # Argument 1: Path to the crash log destination
+    local output_file="data/exit_times.txt"
+
+    echo "=== Simulation failed! Running fallback data retrieval ==="
+
+    # 1. Backup crash logs and run video maker
+    mkdir -p "$target_log_dir"
+    cp -r data/* "$target_log_dir/"
+
+    # 2. Extract TIME_INCREMENT float from data/param.txt
+    local time_increment
+    time_increment=$(awk '/^dt:[[:space:]]*/ {print $2}' data/param.txt)
+
+    # 3. Extract all numbers, sort numerically (-n), and grab the bottom one
+    local max_timestep_file
+    max_timestep_file=$(ls data/part_*.txt 2>/dev/null | sed 's/[^0-9]//g' | sort -n | tail -n 1)
+    
+    if [ -z "$max_timestep_file" ]; then
+        echo "Error: No data files found to process."
+        return 1
+    fi
+    
+    # 4. Find ordered array of particle IDs that are "nan" in the final step
+    local nan_particles
+    nan_particles=($(awk '$1 ~ /^[0-9]{1,4}$/ && $2 == "nan" {print $1}' "data/part_${max_timestep_file}.txt" | sort -n))
+
+    if [[ ! -f "$output_file" ]]; then
+        echo "ExitTime Beta JobID ParticleID" > "$output_file"
+    fi
+
+
+    # Extract all numbers, and sort them reverse-numerically (-rn).
+    local all_timesteps
+    all_timesteps=($(ls data/part_*.txt 2>/dev/null | sed 's/[^0-9]//g' | sort -rn))
+    # 5. Scan backwards to find when each nan particle exited
+    for pid in "${nan_particles[@]}"; do
+        local exit_timestep=""
+        
+        for ts in "${all_timesteps[@]}"; do
+            # Simple, fast match query
+            local status
+            status=$(awk -v id="$pid" '$1 == id { print ($2 != "nan" && $2 != "") ? "MATCH" : "NAN"; exit }' "data/part_${ts}.txt")
+            
+            if [ "$status" = "MATCH" ]; then
+                exit_timestep="$ts"
+                break
+            fi
+        done
+
+        if [ -n "$exit_timestep" ]; then
+            local exit_time
+            exit_time=$(echo "$exit_timestep * $time_increment" | bc -l)
+            printf "%.3f -8 1 %d\n" "$exit_time" "$pid" >> "$output_file"
+        else
+            printf "-1 -8 1 %d\n" "$pid" >> "$output_file"
+        fi
     done
-    # mv data/exit_times.txt ./output/"$N"_particles
-    mv data/exit_times.txt ./output/"$items"_emission-rate/exit_times.txt
+
+    echo "Fallback data recovery complete."
+}
+
+# Ensure base video directory exists
+mkdir --parents ./output/videos
+
+
+# =====================================================================
+# SECTION 1: Varying Particle Counts
+# =====================================================================
+#for N in 1; do
+## for N in 1 2 4 10; do
+#    echo "=== Running simulation for N = $N particles ==="
+#    mkdir --parents ./output/"$N"_particles
+#    
+#    # Update the python script with the current particle count
+#    sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $N # Number of particles/" maze_cluster_script.py
+#    
+#    for i in {1..50}; do
+#    # for i in {i..50}; do
+#        printf -v padded "%02d" $i
+#        rm -f ./data/conc*.txt ./data/part*.txt
+#        
+#        python maze_cluster_script.py
+#        
+#        if [ $? -ne 0 ]; then
+#            # Calling the recovery function for Section 1
+#            process_crash_recovery "./output/${N}_particles/crash_logs/${padded}/data"
+#        fi
+#        if [ $i -le 5 ]; then
+#            python video_maker.py
+#            cp ./data/particle_trajectory.mp4 "./output/instant_release/"$N"_particles/${N}_particles_trajectory_$padded.mp4"
+#        fi
+#        if [ $i -eq 25 ]; then
+#            echo "interation number: 25"
+#        fi
+#    done
+#    ls -la data/ # | grep exit_times 
+#
+#    mkdir output/xbucket
+#    echo "# exit_times.txt, Simultaneuos Release, N: ${N}"
+#    cat exit_times.txt >> output/xbucket/recover_data.txt
+#    mv ./data/exit_times.txt ./output/instant_release/"$N"_particles/
+#done
+#
+#echo "All particle number simulations complete!"
+
+
+# =====================================================================
+# SECTION 2: Varying Emission Rate
+# =====================================================================
+#for ER in 0.25 0.5 1 2 4 10; do
+# timestep_list = [ (0.25,1*10**-3) 0.5, 0.25*10**-3) 1, 0.25*10**-3) (2, 0.25*10**-3) (4, ?) (10, ?)]
+for ER in 10 20; do
+    DT=0.25  # Timestep in milliseconds (*10**-3)
+    CALCULATED_PARTICLES=$(echo "$ER * 100" | bc | cut -d'.' -f1)
+    echo "=== Running simulation: emission_rate = $ER ($CALCULATED_PARTICLES particles) ==="
+    mkdir --parents ./output/"${ER}"_emission_rate
+
+    if [ $ER -eq 10 ]; then
+        DT=0.0010
+    fi
+    
+    sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $CALCULATED_PARTICLES # Number of particles/" maze_cluster_script.py
+    sed -i -E "s/^emission_rate = [0-9.]+(\s*#.*)?\$/emission_rate = $ER # droplets per second/" maze_cluster_script.py
+    sed -i -E "s/^dt = .*/dt = $DT * 10 ** (-3)  # time step size/" maze_cluster_script.py
+    cat maze_cluster_script.py | grep "dt =" 
+    
+    rm data/exit_times.txt
+
+    for i in {1..3}; do
+        printf -v padded "%02d" $i
+        rm -f data/conc*.txt data/part*.txt
+        
+        python maze_cluster_script.py
+        exit_status=$?
+
+        if [ $? -ne 0 ]; then
+            # Calling the same recovery function for Section 2
+            process_crash_recovery "./output/${ER}_emission_rate/crash_logs/${padded}/data"
+        fi
+
+        if [ $i -eq 1 ]; then
+            python video_maker.py
+            cp ./data/particle_trajectory.mp4 ./output/"${ER}"_emission_rate/"${ER}"_emission_trajectory_"${padded}".mp4
+        fi
+
+    done
+    
+    cp ./data/exit_times.txt ./output/"${ER}"_emission_rate/
 done
+
+echo "All emission rate simulations complete!"
 
 
 --------------- maze_cluster_script.py -----------
-#%reload_ext autoreload
-#%autoreload 2
+# %reload_ext autoreload
+# %autoreload 2
 
 import matplotlib.pyplot as plt
 import os
@@ -38,91 +173,94 @@ from list_of_functions import *
 # This script is used to run the chemical solver on a maze with one particle.
 # It initializes the parameters, generates a maze, and runs the simulation.
 
+beta = -8
 
-#Simulation parameters
-#beta = np.random.uniform(1,25)
-beta = -1
-
-Dc = 1.0*10**(2) #diffusion coefficient of the chemical
-Dp = 1.0*10**(0) #noise strength for the particle
-Bp = beta*10**(4) #chemotactic sensitivity
-moving_source_production_strength = 1.0 #strength of the source
-moving_source_decay_rate = 0.0 #characteristic decay rate of the source
-global_decay_strength = 0.0 #evaporation of chemical from environment
-self_propulsion_speed = 0.0 #self-propulsion speed of the particle 
-sp_decay_rate = 0.0 #characteristic decay rate of the self-propulsion
-self_propulsion_frequency = 0.0 #self-propulsion angular velocity of the particle
-Dr = 3.0 #rotational diffusion coefficient of the particle 
-M = 6.0*10**(-2) #mass of the particle
-J = 2.0*10**(-2) #moment of inertia of the particle
+Dc = 2.0 * 10 ** (2)  # diffusion coefficient of the chemical (100)
+Dp = 1.0 * 10 ** (0)  # noise strength for the particle (0.1)
+Bp = beta * 10 ** (4)  # chemotactic sensitivity (CR: -16000, CA:16000)
+moving_source_production_strength = 1.0  # strength of the source
+moving_source_decay_rate = 1 / 70  # characteristic decay rate of the source
+global_decay_strength = 0.0  # evaporation of chemical from environment
+self_propulsion_speed = 0.0 * 10 ** (1)  # self-propulsion speed of the particle (1.0)
+sp_decay_rate = 0.0  # characteristic decay rate of the self-propulsion
+self_propulsion_frequency = 0.0  # self-propulsion angular velocity of the particle
+Dr = 3.0  # rotational diffusion coefficient of the particle (1.0)
+M = 1.0 * 10 ** (-1)  # mass of the particle (0.001, 0.2)
+J = 4.0 * 10 ** (-2)  # moment of inertia of the particle (0.001, 0.06)
 
 epsilon_LJ = 0.10  # Lennard-Jones potential parameter for interaction between particles
 static_source_position = (90.2, 10.5)  # Position of the static source
 static_source_production_strength = 0.0  # Strength of the static source
-static_source_decay_rate = 0.0 #characteristic decay rate of the source
+static_source_decay_rate = 0.0  # characteristic decay rate of the source
 
-advection=False #whether to include advection term in the chemical equation
-massive_particle = False #whether to include mass in the particle equation
-exit_radius = 20.0 #radius of the exit around the target (static source)
-exit_wall_radius = 20.0 #radius for the leaky exit wall
-permeability = 0.99 #permeability of the exit wall (0 = no-flux, >0 = leaky)
+advection = False  # whether to include advection term in the chemical equation
+massive_particle = True  # whether to include mass in the particle equation
+exit_radius = 20.0  # radius of the exit aroudn the target (static source)
+exit_wall_radius = 20.0  # radius for the leaky exit wall
+permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 # Simulation parameters
-dx = 1.0 #grid spacing
-Lx = 100.0 #domain size
-Ly = 100.0 #domain size
-n_xbins = int(Lx/dx) #number of bins in x direction
-n_ybins = int(Ly/dx) #number of bins in y direction
-n_steps = 1000 #number of time steps
-dt = 1.0 * 10**(-3) #time step size
-gamma = (Dc * dt) / (dx ** 2) #gamma parameter
-time_loop = 100 #number of time loops
-time = np.arange(0, time_loop*n_steps, 1)*dt
-time = time[np.newaxis,:]
-total_time = dt*time_loop*n_steps #total time of the simulation
-write_every = 100 #write output after every this many time steps
+dx = 1.0  # grid spacing
+Lx = 100.0  # domain size
+Ly = 100.0  # domain size
+n_xbins = int(Lx / dx)  # number of bins in x direction
+n_ybins = int(Ly / dx)  # number of bins in y direction
+n_steps = 300  # number of time steps 40000
+dt = 0.0010 * 10 ** (-3)  # time step size
+gamma = (Dc * dt) / (dx**2)  # gamma parameter
+time_loop = 100  # number of time loops
+time = np.arange(0, time_loop * n_steps, 1) * dt
+time = time[np.newaxis, :]
+total_time = dt * time_loop * n_steps  # total time of the simulation
+write_every = 400  # write output after every this many time steps
 
 # Data directory
-data = 'data' # for linux
-#data = 'D:\maze_data' # for windows
+data = "data"  # for linux
+# data = 'D:\maze_data' # for windows
 # Check if data directory exists, if not, create it
 if not os.path.exists(data):
     os.makedirs(data)
-param_filename = data + '/param.txt'
-grid_filename = data + '/grid.txt'
-file_prefix_conc = data + '/conc'
-file_prefix_part = data + '/part'
+param_filename = data + "/param.txt"
+grid_filename = data + "/grid.txt"
+file_prefix_conc = data + "/conc"
+file_prefix_part = data + "/part"
 
 
 # Generate a maze
-#maze = box_maze(n_xbins, n_ybins)
+# maze = box_maze(n_xbins, n_ybins)
 
 # maze = maze_from_file('different_mazes/empty_box.tsv')
-maze = maze_from_file('different_mazes/Ran_maze_size_prop_to_droplet.tsv')
-#maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
+maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet.tsv")
+# maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
 wall = np.transpose(np.where(maze == 0))
-
-leaky_wall_mask = get_leaky_wall_mask(maze, static_source_position, dx, exit_wall_radius)
-
-# Create a static death zone map of the exact same dimensions as the maze
-# Initialize everything to False (safe zones)
 death_zone_map = np.zeros_like(maze, dtype=bool)
-# Example: If the exit is a known wall region at the top boundary (e.g., rows 0 to 5, columns 40 to 60)
-death_zone_map[0:5, 40:60] = True 
+# exit at [90.2, 10.5]
+# death_zone_map[94:98, 0:35] = True
+# death_zone_map[50:98, 0:4] = True
+X, Y = np.indices(maze.shape)
+cx, cy = np.rint(np.array(static_source_position) / dx)
+exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
+death_zone_map = exit_zone_map
+
 
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
+num_particles = 1000 # Number of particles
+emission_rate = 10 # droplets per second
 
-emission_rate = 0.25 # droplets per second
-num_particles = int(100 * emission_rate + 5) # Number of particles
-# num_particles = 100 # Number of particles
-emitter_position = np.array([52.0, 14.0], dtype=np.float32)
+# Calculate arrays safely using the master num_particles variable
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 
+emitter_position = np.array([4.0, 82.0], dtype=np.float32)
+emitter_position = np.array([52.0,12.0], dtype=float)
+
+exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
+active_mask = np.zeros(num_particles, dtype=bool)
+dead_tracker = np.zeros(num_particles, dtype=bool)
 
 # All particles start at the same emitter location and activate at delayed birth times.
 p[:, 0, :] = emitter_position
@@ -130,83 +268,178 @@ v[:, 0, :] = 0.0
 theta[:, 0] = np.random.uniform(0, 2.0 * np.pi, size=num_particles)
 omega[:, 0] = 0.0
 
-birth_steps = np.array([int(round(i / emission_rate / dt)) for i in range(num_particles)], dtype=int)
+birth_steps = np.array(
+    [int(round(i / emission_rate / dt)) for i in range(num_particles)], dtype=int
+)
 print(f"Emitter position: {emitter_position}, birth steps: {birth_steps}")
-active_mask = np.zeros(num_particles,dtype=bool)
-dead_tracker = np.zeros(num_particles,dtype=bool)
-exit_times = np.zeros(num_particles)
 
 # Create new map and display the result of chemical diffusion
 conc = initialize_c(c_initial, n_steps, maze)
-#conc = initialize_c_from_file(c_initial, n_steps, maze, data +'/conc_Ran_maze_1x.txt')
+# conc = initialize_c_from_file(c_initial, n_steps, maze, data +'/conc_Ran_maze_1x.txt')
 
 # build a parameter dictionary
-parameter_dict={'Dc': Dc, 'Dp': Dp, 'Bp': Bp, 'moving_source_production_strength': moving_source_production_strength, 'sp_decay_rate': sp_decay_rate,
-                'moving_source_decay_rate': moving_source_decay_rate, 'static_source_decay_rate': static_source_decay_rate, 'global_decay_strength': global_decay_strength,
-                'self_propulsion_speed': self_propulsion_speed, 'self_propulsion_frequency': self_propulsion_frequency,
-                'Dr': Dr, 'M': M, 'J': J, 'epsilon_LJ': epsilon_LJ, 'static_source_position': static_source_position,
-                'static_source_production_strength': static_source_production_strength, 'advection': advection, 'massive_particle': massive_particle,
-                'dx': dx, 'Lx': Lx, 'Ly': Ly, 'n_xbins': n_xbins, 'n_ybins': n_ybins, 'n_steps': n_steps, 'dt': dt, 'gamma': gamma,
-                'total_time': total_time, 'write_every': write_every, 'num_particles': num_particles, 'time_loop': time_loop,
-                'birth_steps': birth_steps, 'dead_tracker': dead_tracker, 'active_mask': active_mask, 'emitter_position': tuple(emitter_position),
-                'param_filename': param_filename, 'grid_filename': grid_filename, 'file_prefix_conc': file_prefix_conc,
-                'file_prefix_part': file_prefix_part, 'exit_radius': exit_radius, 'leaky_wall_mask': leaky_wall_mask, 'permeability': permeability}
+parameter_dict = {
+    "Dc": Dc,
+    "Dp": Dp,
+    "Bp": Bp,
+    "moving_source_production_strength": moving_source_production_strength,
+    "sp_decay_rate": sp_decay_rate,
+    "moving_source_decay_rate": moving_source_decay_rate,
+    "static_source_decay_rate": static_source_decay_rate,
+    "global_decay_strength": global_decay_strength,
+    "self_propulsion_speed": self_propulsion_speed,
+    "self_propulsion_frequency": self_propulsion_frequency,
+    "Dr": Dr,
+    "M": M,
+    "J": J,
+    "epsilon_LJ": epsilon_LJ,
+    "static_source_position": static_source_position,
+    "static_source_production_strength": static_source_production_strength,
+    "advection": advection,
+    "massive_particle": massive_particle,
+    "dx": dx,
+    "Lx": Lx,
+    "Ly": Ly,
+    "n_xbins": n_xbins,
+    "n_ybins": n_ybins,
+    "n_steps": n_steps,
+    "dt": dt,
+    "gamma": gamma,
+    "total_time": total_time,
+    "write_every": write_every,
+    "num_particles": num_particles,
+    "time_loop": time_loop,
+    "birth_steps": birth_steps,
+    "active_mask": active_mask,
+    "dead_tracker": dead_tracker,
+    "death_zone_map": death_zone_map,
+    "exit_zone_map": exit_zone_map,
+    "emitter_position": tuple(emitter_position),
+    "param_filename": param_filename,
+    "grid_filename": grid_filename,
+    "file_prefix_conc": file_prefix_conc,
+    "file_prefix_part": file_prefix_part,
+    "exit_radius": exit_radius,
+    "exit_wall_mask": exit_wall_mask,
+    "permeability": permeability,
+}
 
-full_traj = np.empty((num_particles,0,15), dtype=np.float32)
-
+full_traj = np.empty((num_particles, 0, 15), dtype=np.float32)
+exit_times = np.zeros(num_particles)
 for i in range(time_loop):
-    conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep = chemical_solver(conc, p, theta, v, omega, maze, exit_times, start_step=i*n_steps, **parameter_dict)
+    conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep = (
+        chemical_solver(
+            conc,
+            p,
+            theta,
+            v,
+            omega,
+            maze,
+            exit_times,
+            start_step=i * n_steps,
+            **parameter_dict,
+        )
+    )
     if exit:
-        current_time = np.repeat(time[:, i*n_steps: exit_timestep+1, np.newaxis], num_particles, axis=0)
-        current_traj = np.concatenate((current_time, p[:,0: exit_timestep%n_steps+1,:], 
-                                       theta[:, 0: exit_timestep%n_steps+1, np.newaxis], v[:,0: exit_timestep%n_steps+1,:], 
-                                       omega[:, 0: exit_timestep%n_steps+1, np.newaxis], f_sp[:,0: exit_timestep%n_steps+1,:],
-                                       f_chem[:,0: exit_timestep%n_steps+1,:], f_int[:,0: exit_timestep%n_steps+1,:],
-                                       f_wall[:,0: exit_timestep%n_steps+1,:]), axis=-1)
-        full_traj = np.append(full_traj, current_traj, axis=1)
-        conc[-1,:,:] = conc[exit_timestep % n_steps,:,:]
+        current_time = np.repeat(
+            time[:, i * n_steps : exit_timestep + 1, np.newaxis], num_particles, axis=0
+        )
+        current_traj = np.concatenate(
+            (
+                current_time,
+                p[:, 0 : exit_timestep % n_steps + 1, :],
+                theta[:, 0 : exit_timestep % n_steps + 1, np.newaxis],
+                v[:, 0 : exit_timestep % n_steps + 1, :],
+                omega[:, 0 : exit_timestep % n_steps + 1, np.newaxis],
+                f_sp[:, 0 : exit_timestep % n_steps + 1, :],
+                f_chem[:, 0 : exit_timestep % n_steps + 1, :],
+                f_int[:, 0 : exit_timestep % n_steps + 1, :],
+                f_wall[:, 0 : exit_timestep % n_steps + 1, :],
+            ),
+            axis=-1,
+        )
+        # full_traj = np.append(full_traj, current_traj, axis=1)
+        conc[-1, :, :] = conc[exit_timestep % n_steps, :, :]
         break
-    current_time = np.repeat(time[:, i*n_steps: (i+1)*n_steps, np.newaxis], num_particles, axis=0)
-    current_traj = np.concatenate((current_time, p, theta[:, :, np.newaxis], v, omega[:, :, np.newaxis],
-                                   f_sp, f_chem, f_int, f_wall), axis=-1)
-    full_traj = np.append(full_traj, current_traj, axis=1)
+    current_time = np.repeat(
+        time[:, i * n_steps : (i + 1) * n_steps, np.newaxis], num_particles, axis=0
+    )
+    current_traj = np.concatenate(
+        (
+            current_time,
+            p,
+            theta[:, :, np.newaxis],
+            v,
+            omega[:, :, np.newaxis],
+            f_sp,
+            f_chem,
+            f_int,
+            f_wall,
+        ),
+        axis=-1,
+    )
+    # full_traj = np.append(full_traj, current_traj, axis=1)
     conc[0, :, :] = conc[-1, :, :]
-    p[:, 0, :] = p[:,-1,:]
-    theta[:, 0] = theta[:,-1]
-    omega[:, 0] = omega[:,-1]
-    v[:, 0, :] = v[:,-1,:]
+    p[:, 0, :] = p[:, -1, :]
+    theta[:, 0] = theta[:, -1]
+    omega[:, 0] = omega[:, -1]
+    v[:, 0, :] = v[:, -1, :]
 
 
 # Assuming you have column names
-column_names = ['Time', 'X', 'Y', 'Theta', 'VX', 'VY', 'Omega', 'f_spx', 'f_spy', 'f_chemx', 'f_chemy', 'f_intx', 'f_inty', 'f_wallx', 'f_wally']
+column_names = [
+    "Time",
+    "X",
+    "Y",
+    "Theta",
+    "VX",
+    "VY",
+    "Omega",
+    "f_spx",
+    "f_spy",
+    "f_chemx",
+    "f_chemy",
+    "f_intx",
+    "f_inty",
+    "f_wallx",
+    "f_wally",
+]
 
 
 # Save the full trajectory with a header
-#np.savetxt(data + '/full_traj.txt', full_traj[0], fmt='%.8f', header=' '.join(column_names), comments='')
+# np.savetxt(data + '/full_traj.txt', full_traj[0], fmt='%.8f', header=' '.join(column_names), comments='')
 
 
 # Get the job ID from the command line arguments
-job_id = 1 #sys.argv[1]
+job_id = 1  # sys.argv[1]
 
 # Create the filename using the job ID
-filename1 = data + f'/full_traj_{job_id}.txt'
+# filename1 = data + f"/full_traj_{job_id}.txt"
 # Save the full trajectory with a header
-full_traj_write_every = 1
-if exit:
-    np.savetxt(filename1, full_traj[0][::full_traj_write_every], fmt='%.4f', header=' '.join(column_names), comments='')
+# full_traj_write_every = 1
+# if exit:
+#     np.savetxt(
+#         filename1,
+#         full_traj[0][::full_traj_write_every],
+#         fmt="%.4f",
+#         header=" ".join(column_names),
+#         comments="",
+#     )
+# 
 
-filename2 = data + '/exit_times.txt'
+filename2 = data + "/exit_times.txt"
 # Check if the file exists
 if not os.path.isfile(filename2):
     # If the file doesn't exist, write the header
-    with open(filename2, 'w') as f:
+    with open(filename2, "w") as f:
         f.write("ExitTime Beta JobID ParticleID\n")
 
 # Append the data to the file
-with open(filename2, 'a') as f:
+with open(filename2, "a") as f:
     for particle_id in range(num_particles):
-        f.write(f"{(max(exit_times[particle_id]-birth_steps[particle_id],0)) *dt} {beta} {job_id} {particle_id}\n")
-    
+        f.write(
+            f"{max((exit_times[particle_id]-birth_steps[particle_id]) *dt, -1)} {beta} {job_id} {particle_id}\n"
+        )
 
 
 
@@ -216,6 +449,7 @@ with open(filename2, 'a') as f:
 # Import the necessary libraries
 import numpy as np
 import random
+
 
 def random_maze(width, height):
     maze = np.ones((height, width), dtype=int)
@@ -267,7 +501,7 @@ def random_maze(width, height):
     return maze
 
 
-#define a maze within a single box
+# define a maze within a single box
 def box_maze(nx, ny):
     # Initialize solution: the grid of u(k, i, j)
     m = np.full((nx, ny), 1)
@@ -280,7 +514,8 @@ def box_maze(nx, ny):
 
     return m
 
-#define a custom maze
+
+# define a custom maze
 def custom_maze(nx, ny):
     # Initialize solution: the grid of u(k, i, j)
     m = np.full((nx, ny), 1)
@@ -290,37 +525,37 @@ def custom_maze(nx, ny):
     m[:, 0] = 0
     m[-1, :] = 0
     m[:, -1] = 0
-    
-    #add extra walls
+
+    # add extra walls
     m[100:, 100] = 0
-    m[100, 100:] = 0    
-    
+    m[100, 100:] = 0
 
     return m
 
-#maze from a file
+
+# maze from a file
 def maze_from_file(file_path):
     # Read the TSV file into a 2D NumPy array
     data = np.loadtxt(file_path, delimiter="\t", dtype=int)
-    
+
     # Invert the values (0s to 1s and 1s to 0s)
     inverted_data = 1 - data
-    
+
     # Rotate the matrix by 90 degrees clockwise
     rotated_data = np.rot90(inverted_data, k=-1)
-    
+
     return rotated_data
 
 
-#function to load concentrations from a file
+# function to load concentrations from a file
 def load_c_from_file(maze, filename):
-    nx=maze.shape[0]
-    ny=maze.shape[1]
+    nx = maze.shape[0]
+    ny = maze.shape[1]
     c = np.loadtxt(filename, skiprows=3).reshape((nx, ny))
     return c
 
 
-#function to load trajectory from a file
+# function to load trajectory from a file
 def load_traj_from_file(filename):
     traj = np.loadtxt(filename, skiprows=1)
     return traj
@@ -364,58 +599,58 @@ def print_nearest_wall(maze, x, y, dx=1.0):
     return (int(nearest[0]), int(nearest[1]), distance)
 
 
-def get_leaky_wall_mask(maze, exit_position, dx, exit_wall_radius):
+def get_exit_wall_mask(maze, exit_position, dx, exit_wall_radius):
     """Returns a boolean array of the same shape as maze.
     Selects wall cells (maze == 0) that are on the outer boundary of the domain
     and within exit_wall_radius of exit_position.
     """
     nx, ny = maze.shape
     mask = np.zeros_like(maze, dtype=bool)
-    
+
     boundary_mask = np.zeros_like(maze, dtype=bool)
     boundary_mask[0, :] = True
     boundary_mask[nx - 1, :] = True
     boundary_mask[:, 0] = True
     boundary_mask[:, ny - 1] = True
-    
+
     x_exit, y_exit = exit_position
-    i_coords, j_coords = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    i_coords, j_coords = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
     x_coords = i_coords * dx
     y_coords = j_coords * dx
-    
+
     dists = np.hypot(x_coords - x_exit, y_coords - y_exit)
     mask[(maze == 0) & boundary_mask & (dists <= exit_wall_radius)] = True
     return mask
 
 
-def leaky_exit_wall(conc, t, leaky_wall_mask, permeability, dt):
-    """Applies a leaky boundary condition at the leaky wall cells.
+def leaky_exit_wall(conc, t, exit_wall_mask, permeability, dt):
+    """Applies a leaky boundary condition at the exit wall cells.
     Reduces the concentration at time step t in the mask by dt * permeability.
     """
     factor = max(0.0, 1.0 - dt * permeability)
-    conc[t, leaky_wall_mask] *= factor
+    conc[t, exit_wall_mask] *= factor
     return conc
-
 
 
 
 --------------- list_of_functions.py -----------
 import numpy as np
-from maze_functions import get_leaky_wall_mask, leaky_exit_wall
+from maze_functions import get_exit_wall_mask, leaky_exit_wall
 
 
 # Define the initial conditions
-def initialize_c(c_initial,n_steps, maze):
+def initialize_c(c_initial, n_steps, maze):
     # Initialize solution: the grid of u(k, i, j)
-    nx=maze.shape[0]
-    ny=maze.shape[1]
+    nx = maze.shape[0]
+    ny = maze.shape[1]
     c = np.full((n_steps, nx, ny), c_initial, dtype=np.float32)
-    
+
     return c
 
+
 def initialize_c_from_file(c_initial, n_steps, maze, filename):
-    nx=maze.shape[0]
-    ny=maze.shape[1]
+    nx = maze.shape[0]
+    ny = maze.shape[1]
     c = np.full((n_steps, nx, ny), c_initial, dtype=np.float32)
     c[0] = np.loadtxt(filename, skiprows=3).reshape((nx, ny))
     return c
@@ -423,85 +658,152 @@ def initialize_c_from_file(c_initial, n_steps, maze, filename):
 
 def compute_birth_steps(num_particles, emission_rate, dt):
     emission_interval = 1.0 / emission_rate
-    return np.array([int(round(i * emission_interval / dt)) for i in range(num_particles)], dtype=int)
+    return np.array(
+        [int(round(i * emission_interval / dt)) for i in range(num_particles)],
+        dtype=int,
+    )
 
 
 def active_particle_mask(timestep, birth_steps):
     return timestep >= birth_steps
 
-#define the source function for a moving point source
-def moving_point_source(s, production_strength, timestep, particle_positions, dx, dt, moving_source_decay_rate, n_steps):
+
+# define the source function for a moving point source
+def moving_point_source(
+    s,
+    production_strength,
+    timestep,
+    particle_positions,
+    dx,
+    dt,
+    moving_source_decay_rate,
+    n_steps,
+):
     t = timestep % n_steps
     for particle_id in range(particle_positions.shape[0]):
         x_bin = int(np.rint(particle_positions[particle_id, 0] / dx))
         y_bin = int(np.rint(particle_positions[particle_id, 1] / dx))
-        s[t, x_bin, y_bin] += (production_strength / (dx ** 2)) * np.exp(-timestep * dt * moving_source_decay_rate)
-        #s[t, x_bin, y_bin] += (production_strength / (dx ** 2))
+        s[t, x_bin, y_bin] += (production_strength / (dx**2)) * np.exp(
+            -timestep * dt * moving_source_decay_rate
+        )
+        # s[t, x_bin, y_bin] += (production_strength / (dx ** 2))
     return s
 
 
-#define the source function for a static point source
-def static_point_source(s, production_strength, timestep, source_position, dx, dt, static_source_decay_rate, n_steps):
+# define the source function for a static point source
+def static_point_source(
+    s,
+    production_strength,
+    timestep,
+    source_position,
+    dx,
+    dt,
+    static_source_decay_rate,
+    n_steps,
+):
     t = timestep % n_steps
     x_bin = int(np.rint(source_position[0] / dx))
     y_bin = int(np.rint(source_position[1] / dx))
-    s[t, x_bin, y_bin] += (production_strength / (dx ** 2)) * np.exp(-timestep * dt * static_source_decay_rate)
-    #s[t, x_bin, y_bin] += (production_strength / (dx ** 2))
+    s[t, x_bin, y_bin] += (production_strength / (dx**2)) * np.exp(
+        -timestep * dt * static_source_decay_rate
+    )
+    # s[t, x_bin, y_bin] += (production_strength / (dx ** 2))
     return s
 
 
-#update the flow field based on the distance from the particle
-def update_flow_field(ux, uy, timestep, particle_positions, dx, dt, moving_source_decay_rate, n_steps):
+# update the flow field based on the distance from the particle
+def update_flow_field(
+    ux, uy, timestep, particle_positions, dx, dt, moving_source_decay_rate, n_steps
+):
     t = timestep % n_steps
     # Calculate the shape of the flow velocity arrays
-    nx, ny = ux[t,:,:].shape
-    
-    # Create mesh grids of indices
-    x_indices, y_indices = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    nx, ny = ux[t, :, :].shape
 
-    
+    # Create mesh grids of indices
+    x_indices, y_indices = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
+
     for particle_id in range(particle_positions.shape[0]):
         # Calculate the distances from the particle coordinates to grid points
-        dist_x = x_indices*dx - particle_positions[particle_id, 0]
-        dist_y = y_indices*dx - particle_positions[particle_id, 1]
+        dist_x = x_indices * dx - particle_positions[particle_id, 0]
+        dist_y = y_indices * dx - particle_positions[particle_id, 1]
 
         # Calculate the distances using the 1/r^n dependency, avoiding division by zero
         r = np.sqrt(dist_x**2 + dist_y**2)
-        #r[r < 1e-6] = 1e-6  # Avoid division by zero by adding a small value
+        # r[r < 1e-6] = 1e-6  # Avoid division by zero by adding a small value
 
         # Calculate the flow field based on the 1/r^n dependency
-        #n=1
-        #ux_update = 10**(-1) * dist_x / r**(n+1)
-        #uy_update = 10**(-1) * dist_y / r**(n+1)
-              
+        # n=1
+        # ux_update = 10**(-1) * dist_x / r**(n+1)
+        # uy_update = 10**(-1) * dist_y / r**(n+1)
+
         # Calculate the flow field based on the re^(-r) dependency
-        ux_update = 2.3*10**(4) * dist_x* np.exp(-3.5*r) * np.exp(-timestep * dt * moving_source_decay_rate)
-        uy_update = 2.3*10**(4) * dist_y* np.exp(-3.5*r) * np.exp(-timestep * dt * moving_source_decay_rate)
-        
+        ux_update = (
+            2.3
+            * 10 ** (4)
+            * dist_x
+            * np.exp(-3.5 * r)
+            * np.exp(-timestep * dt * moving_source_decay_rate)
+        )
+        uy_update = (
+            2.3
+            * 10 ** (4)
+            * dist_y
+            * np.exp(-3.5 * r)
+            * np.exp(-timestep * dt * moving_source_decay_rate)
+        )
+
         # Update the flow field
-        ux[t,:,:] += ux_update
-        uy[t,:,:] += uy_update
-        
+        ux[t, :, :] += ux_update
+        uy[t, :, :] += uy_update
+
     return ux, uy
 
-    
-#define noflux boundary condition
-def noflux(conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_neg_indices):
-    conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1]] = conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 1]
-    conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] + 1] = conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1]]
 
-    conc[t, y_diff_indices[:, 0], y_diff_indices[:, 1]] = conc[t, y_diff_indices[:, 0] + 1, y_diff_indices[:, 1]]
-    conc[t, y_diff_neg_indices[:, 0] + 1, y_diff_neg_indices[:, 1]] = conc[t, y_diff_neg_indices[:, 0], y_diff_neg_indices[:, 1]]
+# define noflux boundary condition
+def noflux(
+    conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_neg_indices
+):
+    conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1]] = conc[
+        t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 1
+    ]
+    conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] + 1] = conc[
+        t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1]
+    ]
+
+    conc[t, y_diff_indices[:, 0], y_diff_indices[:, 1]] = conc[
+        t, y_diff_indices[:, 0] + 1, y_diff_indices[:, 1]
+    ]
+    conc[t, y_diff_neg_indices[:, 0] + 1, y_diff_neg_indices[:, 1]] = conc[
+        t, y_diff_neg_indices[:, 0], y_diff_neg_indices[:, 1]
+    ]
 
     return conc
 
-#define noflux boundary condition for a maze
-def noflux_maze(conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_neg_indices, maze, regular_wall_mask=None):
-    conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 1] = conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 2]
-    conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1]] = conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] - 1]
 
-    conc[t, y_diff_indices[:, 0] + 1, y_diff_indices[:, 1]] = conc[t, y_diff_indices[:, 0] + 2, y_diff_indices[:, 1]]
-    conc[t, y_diff_neg_indices[:, 0], y_diff_neg_indices[:, 1]] = conc[t, y_diff_neg_indices[:, 0] - 1, y_diff_neg_indices[:, 1]]
+# define noflux boundary condition for a maze
+def noflux_maze(
+    conc,
+    t,
+    x_diff_indices,
+    y_diff_indices,
+    x_diff_neg_indices,
+    y_diff_neg_indices,
+    maze,
+    regular_wall_mask=None,
+):
+    conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 1] = conc[
+        t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 2
+    ]
+    conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1]] = conc[
+        t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] - 1
+    ]
+
+    conc[t, y_diff_indices[:, 0] + 1, y_diff_indices[:, 1]] = conc[
+        t, y_diff_indices[:, 0] + 2, y_diff_indices[:, 1]
+    ]
+    conc[t, y_diff_neg_indices[:, 0], y_diff_neg_indices[:, 1]] = conc[
+        t, y_diff_neg_indices[:, 0] - 1, y_diff_neg_indices[:, 1]
+    ]
 
     if regular_wall_mask is not None:
         conc[t, regular_wall_mask] = 0.0
@@ -509,6 +811,7 @@ def noflux_maze(conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_d
         conc[t, maze == 0] = 0.0
 
     return conc
+
 
 def chemotaxis_force(position, t, c, maze, dx, Bp, active_mask=None):
     num_particles = position.shape[0]
@@ -519,32 +822,47 @@ def chemotaxis_force(position, t, c, maze, dx, Bp, active_mask=None):
     for particle_id in np.where(active_mask)[0]:
         x_bin = int(np.rint(position[particle_id, t, 0] / dx))
         y_bin = int(np.rint(position[particle_id, t, 1] / dx))
-        
+
         particle_force = np.zeros(2)
-        if 98 in (x_bin, y_bin):
-            print(particle_id)
-            print(x_bin)
-            print(y_bin)
-                
+
         if maze[x_bin, y_bin] != 0:
-            particle_force[0] = Bp * (c[t+1, x_bin + 1, y_bin] - c[t+1, x_bin - 1, y_bin]) / (2.0 * dx)
-            particle_force[1] = Bp * (c[t+1, x_bin, y_bin + 1] - c[t+1, x_bin, y_bin - 1]) / (2.0 * dx)
+            particle_force[0] = (
+                Bp
+                * (c[t + 1, x_bin + 1, y_bin] - c[t + 1, x_bin - 1, y_bin])
+                / (2.0 * dx)
+            )
+            particle_force[1] = (
+                Bp
+                * (c[t + 1, x_bin, y_bin + 1] - c[t + 1, x_bin, y_bin - 1])
+                / (2.0 * dx)
+            )
 
-        if (maze[x_bin + 1, y_bin] == 0 or maze[x_bin - 1, y_bin] == 0):
+        if maze[x_bin + 1, y_bin] == 0 or maze[x_bin - 1, y_bin] == 0:
             particle_force[0] = 0.0
-            particle_force[1] = Bp * (c[t+1, x_bin, y_bin + 1] - c[t+1, x_bin, y_bin - 1]) / (2.0 * dx)
+            particle_force[1] = (
+                Bp
+                * (c[t + 1, x_bin, y_bin + 1] - c[t + 1, x_bin, y_bin - 1])
+                / (2.0 * dx)
+            )
 
-        if (maze[x_bin, y_bin + 1] == 0 or maze[x_bin, y_bin - 1] == 0):
-            particle_force[0] = Bp * (c[t+1, x_bin + 1, y_bin] - c[t+1, x_bin - 1, y_bin]) / (2.0 * dx)
+        if maze[x_bin, y_bin + 1] == 0 or maze[x_bin, y_bin - 1] == 0:
+            particle_force[0] = (
+                Bp
+                * (c[t + 1, x_bin + 1, y_bin] - c[t + 1, x_bin - 1, y_bin])
+                / (2.0 * dx)
+            )
             particle_force[1] = 0.0
 
-        if (maze[x_bin + 1, y_bin] == 0 or maze[x_bin - 1, y_bin] == 0) and (maze[x_bin, y_bin + 1] == 0 or maze[x_bin, y_bin - 1] == 0):
+        if (maze[x_bin + 1, y_bin] == 0 or maze[x_bin - 1, y_bin] == 0) and (
+            maze[x_bin, y_bin + 1] == 0 or maze[x_bin, y_bin - 1] == 0
+        ):
             particle_force[0] = 0.0
             particle_force[1] = 0.0
-        
+
         all_forces[particle_id] = particle_force
-        
+
     return all_forces
+
 
 def interaction_force(position, t, dx, epsilon_LJ, active_mask=None):
     num_particles = position.shape[0]
@@ -561,13 +879,19 @@ def interaction_force(position, t, dx, epsilon_LJ, active_mask=None):
             j = active_indices[j_index]
             disp = position[j, t, :] - position[i, t, :]
             dist = np.linalg.norm(disp)
-            
+
             if dist != 0:
-                lj_force = epsilon_LJ * (12.0 * (sigma / dist)**12 - 6.0 * (sigma / dist)**6) * disp / dist**2
+                lj_force = (
+                    epsilon_LJ
+                    * (12.0 * (sigma / dist) ** 12 - 6.0 * (sigma / dist) ** 6)
+                    * disp
+                    / dist**2
+                )
                 interaction_forces[i, j] = -lj_force
                 interaction_forces[j, i] = lj_force
-    
+
     return interaction_forces
+
 
 def wall_force(position, t, wall_coords, dx, active_mask=None):
     num_particles = position.shape[0]
@@ -583,20 +907,37 @@ def wall_force(position, t, wall_coords, dx, active_mask=None):
         dist = np.linalg.norm(disp_from_wall, axis=1)
         if min(dist) < r_cut:
             index = np.argmin(dist)
-            
-            #WCA potential
+
+            # WCA potential
             epsilon_wca = 10.0
-            force_magnitude = 4.0 * epsilon_wca * (12.0 * (sigma / dist[index])**12 - 6.0 * (sigma / dist[index])**6)
-            forces[i] = force_magnitude * disp_from_wall[index] / (dist[index]**2)
+            force_magnitude = (
+                4.0
+                * epsilon_wca
+                * (
+                    12.0 * (sigma / dist[index]) ** 12
+                    - 6.0 * (sigma / dist[index]) ** 6
+                )
+            )
+            forces[i] = force_magnitude * disp_from_wall[index] / (dist[index] ** 2)
 
             # Soft potential
-            #epsilon_soft = 10000.0
-            #force_magnitude = epsilon_soft * (np.pi / r_cut) * np.sin(np.pi * dist[index] / r_cut)
-            #forces[i] = force_magnitude * disp_from_wall[index] / dist[index]
+            # epsilon_soft = 10000.0
+            # force_magnitude = epsilon_soft * (np.pi / r_cut) * np.sin(np.pi * dist[index] / r_cut)
+            # forces[i] = force_magnitude * disp_from_wall[index] / dist[index]
 
     return forces
 
-def self_propulsion_force(position, timestep, theta, dt, sp_decay_rate, n_steps, self_propulsion_speed, active_mask=None):
+
+def self_propulsion_force(
+    position,
+    timestep,
+    theta,
+    dt,
+    sp_decay_rate,
+    n_steps,
+    self_propulsion_speed,
+    active_mask=None,
+):
     t = timestep % n_steps
     num_particles = position.shape[0]
     forces = np.zeros((num_particles, 2))
@@ -604,29 +945,38 @@ def self_propulsion_force(position, timestep, theta, dt, sp_decay_rate, n_steps,
         active_mask = np.ones(num_particles, dtype=bool)
 
     for i in np.where(active_mask)[0]:
-        forces[i, 0] = self_propulsion_speed * np.cos(theta[i, t]) * np.exp(-timestep * dt * sp_decay_rate)
-        forces[i, 1] = self_propulsion_speed * np.sin(theta[i, t]) * np.exp(-timestep * dt * sp_decay_rate)
-        #forces[i, 1] = self_propulsion_speed * np.sin(theta[i, t])
-        
+        forces[i, 0] = (
+            self_propulsion_speed
+            * np.cos(theta[i, t])
+            * np.exp(-timestep * dt * sp_decay_rate)
+        )
+        forces[i, 1] = (
+            self_propulsion_speed
+            * np.sin(theta[i, t])
+            * np.exp(-timestep * dt * sp_decay_rate)
+        )
+        # forces[i, 1] = self_propulsion_speed * np.sin(theta[i, t])
+
     return forces
 
 
 def write_parameters(**parameters):
-    param_filename = parameters.get('param_filename', 'parameters.txt')
-    with open(param_filename, 'w') as param_file:
+    param_filename = parameters.get("param_filename", "parameters.txt")
+    with open(param_filename, "w") as param_file:
         for key, value in parameters.items():
-            #param_file.write(f"{key}: {value:.2e}\n")
+            # param_file.write(f"{key}: {value:.2e}\n")
             param_file.write(f"{key}: {value}\n")
-            
+
+
 def write_grid(grid_filename, nx, ny):
-    with open(grid_filename, 'w') as f:
+    with open(grid_filename, "w") as f:
         f.write("BOX:\n")
         f.write(f"0 {nx}\n")
         f.write(f"0 {ny}\n")
         f.write("SHAPE:\n")
         f.write(f"{nx} {ny}\n")
         f.write("COORDINATES: X Y\n")
-        
+
         for i in range(nx):
             for j in range(ny):
                 f.write(f"{i} {j}\n")
@@ -635,21 +985,35 @@ def write_grid(grid_filename, nx, ny):
 def write_concentration(file_prefix, c, time_steps, n_steps):
     for t in time_steps:
         filename = f"{file_prefix}_{t}.txt"
-        with open(filename, 'w') as f:
+        with open(filename, "w") as f:
             f.write("TIMESTEP:\n")
             f.write(f"{t}\n")
             f.write("DATA:c\n")
             np.savetxt(f, c[t % n_steps].ravel(), fmt="%.16f")
 
-def write_particles(file_prefix, particles, theta, velocity, ang_velocity,
-                    forces_self_propulsion, forces_chemotaxis, forces_interaction, forces_wall,
-                    time_steps, num_particles, n_steps):
+
+def write_particles(
+    file_prefix,
+    particles,
+    theta,
+    velocity,
+    ang_velocity,
+    forces_self_propulsion,
+    forces_chemotaxis,
+    forces_interaction,
+    forces_wall,
+    time_steps,
+    num_particles,
+    n_steps,
+):
     for t in time_steps:
         filename = f"{file_prefix}_{t}.txt"
-        with open(filename, 'w') as f:
+        with open(filename, "w") as f:
             f.write("TIMESTEP:\n")
             f.write(f"{t}\n")
-            f.write("DATA: particle_id x y theta vx vy omega f_spx f_spy f_chemx f_chemy f_intx f_inty f_wallx f_wally\n")
+            f.write(
+                "DATA: particle_id x y theta vx vy omega f_spx f_spy f_chemx f_chemy f_intx f_inty f_wallx f_wally\n"
+            )
             for particle_id in range(num_particles):
                 f.write(
                     f"{particle_id} {particles[particle_id, t % n_steps, 0]} {particles[particle_id, t % n_steps, 1]} {theta[particle_id, t % n_steps]} "
@@ -658,100 +1022,111 @@ def write_particles(file_prefix, particles, theta, velocity, ang_velocity,
                     f"{forces_chemotaxis[particle_id, 0]} {forces_chemotaxis[particle_id, 1]} "
                     f"{forces_interaction[particle_id, :, 0].sum()} {forces_interaction[particle_id, :, 1].sum()} "
                     f"{forces_wall[particle_id, 0]} {forces_wall[particle_id, 1]}\n"
-                    )
+                )
 
 
+def exit_condition(timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker):
+    # A particle exits if it lands on a True cell in the exit map,
+    # hasn't exited yet, and isn't dead.
+    new_exits = exit_zone_map[px_bins, py_bins] & (exit_times == 0.0)
 
-def exit_condition(position, num_particles, timestep, n_steps, exit_times, exit_point, exit_radius):
-    # exit_times = np.zeros(num_particles)
-    t = timestep % n_steps
-    exit = np.zeros(num_particles)
-    for particle_id in range(num_particles):
-        dist = np.linalg.norm(position[particle_id,t] - exit_point)
-        if exit_times[particle_id] != 0.0:
-            exit[particle_id] = 1
-        else:
-            if dist < exit_radius:
-                print("particle close to exit!")
-                exit_times[particle_id] = timestep
-                exit[particle_id] = 1
-    return np.sum(exit) == num_particles
+    if np.any(new_exits):
+        print(f"{np.sum(new_exits)} particle(s) reached the exit region!")
+        exit_times[new_exits] = timestep
 
-def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times, start_step=0, **kwargs):
-    
-    #unpacking the kwargs
-    dx = kwargs.get('dx',1)
-    Dc = kwargs.get('Dc',1)
-    Dp = kwargs.get('Dp',1)
-    Bp = kwargs.get('Bp',1)
-    moving_source_production_strength = kwargs.get('moving_source_production_strength',1)
-    static_source_production_strength = kwargs.get('static_source_production_strength',1)
-    moving_source_decay_rate = kwargs.get('moving_source_decay_rate',0)
-    static_source_decay_rate = kwargs.get('static_source_decay_rate',0)
-    sp_decay_rate = kwargs.get('sp_decay_rate',0)
-    global_decay_strength = kwargs.get('global_decay_strength',1)
-    self_propulsion_speed = kwargs.get('self_propulsion_speed',1)
-    self_propulsion_frequency = kwargs.get('self_propulsion_frequency',1)
-    Dr = kwargs.get('Dr',1)
-    M = kwargs.get('M',1)
-    J = kwargs.get('J',1)
-    Lx = kwargs.get('Lx',1)
-    Ly = kwargs.get('Ly',1)
-    n_xbins = kwargs.get('n_xbins',1)
-    n_ybins = kwargs.get('n_ybins',1)
-    n_steps = kwargs.get('n_steps',1)
-    dt = kwargs.get('dt',1)
-    gamma = kwargs.get('gamma',1)
-    total_time = kwargs.get('total_time',1)
-    time_loop = kwargs.get('time_loop',1)
-    write_every = kwargs.get('write_every',1)
-    num_particles = kwargs.get('num_particles',1)
-    param_filename = kwargs.get('param_filename',1)
-    grid_filename = kwargs.get('grid_filename',1)
-    file_prefix_conc = kwargs.get('file_prefix_conc',1)
-    file_prefix_part = kwargs.get('file_prefix_part',1)
-    advection = kwargs.get('advection',False)
-    massive_particle = kwargs.get('massive_particle',False)
-    moving_source_decay = kwargs.get('moving_source_decay',False)
-    static_source_decay = kwargs.get('static_source_decay',False)
-    epsilon_LJ = kwargs.get('epsilon_LJ',1)
-    static_source_position = kwargs.get('static_source_position',(1,1))
-    exit_radius = kwargs.get('exit_radius',20)
-    birth_steps = kwargs.get('birth_steps', np.zeros(num_particles, dtype=int))
-    dead_tracker = kwargs.get('birth_steps', np.zeros(num_particles, dtype=int))
-    active_mask = kwargs.get('active_mask', np.zeros(num_particles, dtype=bool))
-    emitter_position = np.array(kwargs.get('emitter_position',(0.0, 0.0)), dtype=np.float32)
-    permeability = kwargs.get('permeability', 0.0)
-    leaky_wall_mask = kwargs.get('leaky_wall_mask', None)
-    
-            
+    # Check if all particles have successfully exited or died
+    has_exited_or_died = (exit_times > 0.0) | dead_tracker
+    return np.all(has_exited_or_died)
+
+
+def chemical_solver(
+    c, position, theta, velocity, ang_velocity, maze, exit_times, start_step=0, **kwargs
+):
+
+    # unpacking the kwargs
+    dx = kwargs.get("dx", 1)
+    Dc = kwargs.get("Dc", 1)
+    Dp = kwargs.get("Dp", 1)
+    Bp = kwargs.get("Bp", 1)
+    moving_source_production_strength = kwargs.get(
+        "moving_source_production_strength", 1
+    )
+    static_source_production_strength = kwargs.get(
+        "static_source_production_strength", 1
+    )
+    moving_source_decay_rate = kwargs.get("moving_source_decay_rate", 0)
+    static_source_decay_rate = kwargs.get("static_source_decay_rate", 0)
+    sp_decay_rate = kwargs.get("sp_decay_rate", 0)
+    global_decay_strength = kwargs.get("global_decay_strength", 1)
+    self_propulsion_speed = kwargs.get("self_propulsion_speed", 1)
+    self_propulsion_frequency = kwargs.get("self_propulsion_frequency", 1)
+    Dr = kwargs.get("Dr", 1)
+    M = kwargs.get("M", 1)
+    J = kwargs.get("J", 1)
+    Lx = kwargs.get("Lx", 1)
+    Ly = kwargs.get("Ly", 1)
+    n_xbins = kwargs.get("n_xbins", 1)
+    n_ybins = kwargs.get("n_ybins", 1)
+    n_steps = kwargs.get("n_steps", 1)
+    dt = kwargs.get("dt", 1)
+    gamma = kwargs.get("gamma", 1)
+    total_time = kwargs.get("total_time", 1)
+    time_loop = kwargs.get("time_loop", 1)
+    write_every = kwargs.get("write_every", 1)
+    num_particles = kwargs.get("num_particles", 1)
+    param_filename = kwargs.get("param_filename", 1)
+    grid_filename = kwargs.get("grid_filename", 1)
+    file_prefix_conc = kwargs.get("file_prefix_conc", 1)
+    file_prefix_part = kwargs.get("file_prefix_part", 1)
+    advection = kwargs.get("advection", False)
+    massive_particle = kwargs.get("massive_particle", False)
+    moving_source_decay = kwargs.get("moving_source_decay", False)
+    static_source_decay = kwargs.get("static_source_decay", False)
+    epsilon_LJ = kwargs.get("epsilon_LJ", 1)
+    static_source_position = kwargs.get("static_source_position", (1, 1))
+    exit_radius = kwargs.get("exit_radius", 20)
+    birth_steps = kwargs.get("birth_steps", np.zeros(num_particles, dtype=int))
+    active_mask = kwargs.get("active_mask", np.zeros(num_particles, dtype=bool))
+    dead_tracker = kwargs.get("dead_tracker", np.zeros(num_particles, dtype=bool))
+    death_zone_map = kwargs.get("death_zone_map", np.zeros_like(maze, dtype=bool))
+    exit_zone_map = kwargs.get("exit_zone_map", np.zeros_like(maze, dtype=bool))
+    emitter_position = np.array(
+        kwargs.get("emitter_position", (0.0, 0.0)), dtype=np.float32
+    )
+    permeability = kwargs.get("permeability", 0.0)
+    exit_wall_mask = kwargs.get("exit_wall_mask", None)
+
     nt, nx, ny = c.shape
     wall = maze == 0
     x_diff = np.diff(maze, axis=1)
     y_diff = np.diff(maze, axis=0)
-    
+
     # Precalculate x_diff and y_diff indices
     x_diff_indices = np.transpose(np.where(x_diff == 1))
     y_diff_indices = np.transpose(np.where(y_diff == 1))
     x_diff_neg_indices = np.transpose(np.where(x_diff == -1))
     y_diff_neg_indices = np.transpose(np.where(y_diff == -1))
-    
+
     # Filter boundary-transition indices and wall coordinates for leaky walls
-    if permeability > 0.0 and leaky_wall_mask is not None:
-        in_exit_wall_x = leaky_wall_mask[x_diff_indices[:, 0], x_diff_indices[:, 1]]
+    if permeability > 0.0 and exit_wall_mask is not None:
+        in_exit_wall_x = exit_wall_mask[x_diff_indices[:, 0], x_diff_indices[:, 1]]
         x_diff_indices_reg = x_diff_indices[~in_exit_wall_x]
-        
-        in_exit_wall_x_neg = leaky_wall_mask[x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] + 1]
+
+        in_exit_wall_x_neg = exit_wall_mask[
+            x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] + 1
+        ]
         x_diff_neg_indices_reg = x_diff_neg_indices[~in_exit_wall_x_neg]
-        
-        in_exit_wall_y = leaky_wall_mask[y_diff_indices[:, 0], y_diff_indices[:, 1]]
+
+        in_exit_wall_y = exit_wall_mask[y_diff_indices[:, 0], y_diff_indices[:, 1]]
         y_diff_indices_reg = y_diff_indices[~in_exit_wall_y]
-        
-        in_exit_wall_y_neg = leaky_wall_mask[y_diff_neg_indices[:, 0] + 1, y_diff_neg_indices[:, 1]]
+
+        in_exit_wall_y_neg = exit_wall_mask[
+            y_diff_neg_indices[:, 0] + 1, y_diff_neg_indices[:, 1]
+        ]
         y_diff_neg_indices_reg = y_diff_neg_indices[~in_exit_wall_y_neg]
-        
-        regular_wall_mask = (maze == 0) & ~leaky_wall_mask
-        wall_coords = np.transpose(np.where((maze == 0) & ~leaky_wall_mask)) * dx
+
+        regular_wall_mask = (maze == 0) & ~exit_wall_mask
+        wall_coords = np.transpose(np.where((maze == 0) & ~exit_wall_mask)) * dx
     else:
         x_diff_indices_reg = x_diff_indices
         x_diff_neg_indices_reg = x_diff_neg_indices
@@ -759,181 +1134,290 @@ def chemical_solver(c, position, theta, velocity, ang_velocity, maze, exit_times
         y_diff_neg_indices_reg = y_diff_neg_indices
         regular_wall_mask = maze == 0
         wall_coords = np.transpose(np.where(maze == 0)) * dx
-    
+
     source = np.full((nt, nx, ny), 0.0, dtype=np.float32)
     ux = np.full((nt, nx, ny), 0.0, dtype=np.float32)
     uy = np.full((nt, nx, ny), 0.0, dtype=np.float32)
-    
+
     f_sp = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
     f_chem = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
     f_int = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
     f_wall = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
-    
+
     exit = False
     exit_timestep = np.inf
 
+    px_bins = np.zeros(num_particles, dtype=int)
+    py_bins = np.zeros(num_particles, dtype=int)
+
     for timestep in range(start_step, start_step + nt - 1):
         t = timestep % nt
+
+        new_births = birth_steps == timestep
+        if np.any(new_births):
+            active_mask[new_births] = True
+        active_mask[dead_tracker] = False
+
+        if np.any(active_mask):
+            # Calculate bins ONLY for active particles to safely avoid NaNs
+            px_bins[active_mask] = np.rint(position[active_mask, t, 0] / dx).astype(int)
+            py_bins[active_mask] = np.rint(position[active_mask, t, 1] / dx).astype(int)
+
+            # Clip only the active indices safely within maze boundaries
+            px_bins[active_mask] = np.clip(px_bins[active_mask], 0, maze.shape[0] - 1)
+            py_bins[active_mask] = np.clip(py_bins[active_mask], 0, maze.shape[1] - 1)
+
+        hit_exit_zone = active_mask & death_zone_map[px_bins, py_bins]
+
+        if np.any(hit_exit_zone):
+            dead_tracker[hit_exit_zone] = True
+            position[hit_exit_zone, t:, :] = np.nan
+            velocity[hit_exit_zone, t:, :] = np.nan
+
+        active_mask[dead_tracker] = False
+
+        inactive_mask = ~active_mask
+        position[inactive_mask, t + 1, :] = position[inactive_mask, t, :]
+        velocity[inactive_mask, t + 1, :] = 0.0
+        theta[inactive_mask, t + 1] = theta[inactive_mask, t]
+        ang_velocity[inactive_mask, t + 1] = ang_velocity[inactive_mask, t]
+
         A = c[t, 2:, 1:-1]  # c[k, i+1, j]
         B = c[t, :-2, 1:-1]  # c[k, i-1, j]
         C = c[t, 1:-1, 2:]  # c[k, i, j+1]
         D = c[t, 1:-1, :-2]  # c[k, i, j-1]
         E = c[t, 1:-1, 1:-1]  # c[k, i, j]
 
-        new_births = (birth_steps == timestep)
-        if np.any(new_births):
-            active_mask[new_births] = True
-        active_mask[dead_tracker] = False
-        
-
-        # active_mask = active_particle_mask(timestep, birth_steps)
-        # inactive_mask = ~active_mask
-
-        position[inactive_mask, t, :] = position[inactive_mask, t-1, :]
-        velocity[inactive_mask, t, :] = 0.0
-        if t > 0:
-            theta[inactive_mask, t] = theta[inactive_mask, t-1]
-            ang_velocity[inactive_mask, t] = ang_velocity[inactive_mask, t-1]
-
         particle_positions = position[:, t, :]
-        source = moving_point_source(source, moving_source_production_strength, timestep,
-                                     particle_positions[active_mask], dx, dt,
-                                     moving_source_decay_rate, n_steps)
-        source = static_point_source(source, static_source_production_strength, timestep, static_source_position, dx, dt, static_source_decay_rate, n_steps)
+        source = moving_point_source(
+            source,
+            moving_source_production_strength,
+            timestep,
+            particle_positions[active_mask],
+            dx,
+            dt,
+            moving_source_decay_rate,
+            n_steps,
+        )
+        source = static_point_source(
+            source,
+            static_source_production_strength,
+            timestep,
+            static_source_position,
+            dx,
+            dt,
+            static_source_decay_rate,
+            n_steps,
+        )
         S = source[t, 1:-1, 1:-1]
-        result = gamma * (A + B + C + D - 4 * E) + E + S * dt - global_decay_strength * dt * E
+        result = (
+            gamma * (A + B + C + D - 4 * E)
+            + E
+            + S * dt
+            - global_decay_strength * dt * E
+        )
 
         if advection == True:
             # Calculate fluid velocity
-            ux, uy = update_flow_field(ux, uy, timestep, particle_positions[active_mask], dx, dt, moving_source_decay_rate, n_steps)
-                        
+            ux, uy = update_flow_field(
+                ux,
+                uy,
+                timestep,
+                particle_positions[active_mask],
+                dx,
+                dt,
+                moving_source_decay_rate,
+                n_steps,
+            )
+
             # Calculate advection term
-            adv = -(dt/(2.0 * dx)) * (np.multiply(ux[t, 1:-1, 1:-1], (A - B))  + np.multiply(uy[t, 1:-1, 1:-1], (C - D)))
-            
+            adv = -(dt / (2.0 * dx)) * (
+                np.multiply(ux[t, 1:-1, 1:-1], (A - B))
+                + np.multiply(uy[t, 1:-1, 1:-1], (C - D))
+            )
+
             # Add advection term to the result
             result += adv
-        
+
         # Set the newly computed heatmap at time k+1
-        c[t+1, 1:-1, 1:-1] = result
-        
+        c[t + 1, 1:-1, 1:-1] = result
+
         # Noflux boundary condition for maze
-        noflux_maze(c, t+1, x_diff_indices_reg, y_diff_indices_reg, x_diff_neg_indices_reg, y_diff_neg_indices_reg, maze, regular_wall_mask)
-        
+        noflux_maze(
+            c,
+            t + 1,
+            x_diff_indices_reg,
+            y_diff_indices_reg,
+            x_diff_neg_indices_reg,
+            y_diff_neg_indices_reg,
+            maze,
+            regular_wall_mask,
+        )
+
         # Leaky boundary condition for exit walls
-        if permeability > 0.0 and leaky_wall_mask is not None:
-            c = leaky_exit_wall(c, t+1, leaky_wall_mask, permeability, dt)
-        
+        if permeability > 0.0 and exit_wall_mask is not None:
+            c = leaky_exit_wall(c, t + 1, exit_wall_mask, permeability, dt)
+
         # Forces
-        forces_interaction = interaction_force(position, t, dx, epsilon_LJ, active_mask=active_mask)
-        forces_chemotaxis = chemotaxis_force(position, t, c, maze, dx, Bp, active_mask=active_mask)
+        forces_interaction = interaction_force(
+            position, t, dx, epsilon_LJ, active_mask=active_mask
+        )
+        forces_chemotaxis = chemotaxis_force(
+            position, t, c, maze, dx, Bp, active_mask=active_mask
+        )
         forces_wall = wall_force(position, t, wall_coords, dx, active_mask=active_mask)
-        forces_self_propulsion = self_propulsion_force(position, timestep, theta, dt, sp_decay_rate, n_steps, self_propulsion_speed, active_mask=active_mask)
-        
+        forces_self_propulsion = self_propulsion_force(
+            position,
+            timestep,
+            theta,
+            dt,
+            sp_decay_rate,
+            n_steps,
+            self_propulsion_speed,
+            active_mask=active_mask,
+        )
+
         forces_interaction_sum = forces_interaction.sum(axis=1)
-        f_int[:, t, :]  = forces_interaction_sum
+
+        f_int[:, t, :] = forces_interaction_sum
         f_chem[:, t, :] = forces_chemotaxis
         f_wall[:, t, :] = forces_wall
-        f_sp[:, t, :]   = forces_self_propulsion
+        f_sp[:, t, :] = forces_self_propulsion
 
         dt_noise = np.sqrt(2.0 * Dp * dt)
         dr_noise = np.sqrt(2.0 * Dr * dt)
+        # Generate random noise for ALL particles at once (faster than generating it inside a loop)
         noise_x = dt_noise * np.random.normal(0, 1, size=num_particles)
         noise_y = dt_noise * np.random.normal(0, 1, size=num_particles)
         noise_theta = dr_noise * np.random.normal(0, 1, size=num_particles)
-        
-        if massive_particle:
-            # --- 1. Handle Inactive / Dead particles first (Bulk assignment) ---
-            inactive_mask = ~active_mask
-            position[inactive_mask, t + 1, :] = position[inactive_mask, t + 1, :]
-            velocity[inactive_mask, t + 1, :] = 0.0
-            theta[inactive_mask, t + 1] = theta[inactive_mask, t]
-            ang_velocity[inactive_mask, t + 1] = ang_velocity[inactive_mask, t]
 
-            # --- 2. Update Active particles simultaneously using the mask ---
+        if massive_particle:
+            # Update Active particles simultaneously using the mask ---
             # Position
-            position[active_mask, t + 1, 0] = position[active_mask, t, 0] + dt * velocity[active_mask, t, 0]
-            position[active_mask, t + 1, 1] = position[active_mask, t, 1] + dt * velocity[active_mask, t, 1]
+            position[active_mask, t + 1, 0] = (
+                position[active_mask, t, 0] + dt * velocity[active_mask, t, 0]
+            )
+            position[active_mask, t + 1, 1] = (
+                position[active_mask, t, 1] + dt * velocity[active_mask, t, 1]
+            )
 
             # Velocity
-            velocity[active_mask, t + 1, 0] = velocity[active_mask, t, 0] + (1/M) * (
-                - dt * velocity[active_mask, t, 0] 
-                + dt * forces_self_propulsion[active_mask, 0] 
-                + dt * forces_chemotaxis[active_mask, 0] 
-                + dt * forces_interaction_sum[active_mask, 0] 
-                + dt * forces_wall[active_mask, 0] 
+            velocity[active_mask, t + 1, 0] = velocity[active_mask, t, 0] + (1 / M) * (
+                -dt * velocity[active_mask, t, 0]
+                + dt * forces_self_propulsion[active_mask, 0]
+                + dt * forces_chemotaxis[active_mask, 0]
+                + dt * forces_interaction_sum[active_mask, 0]
+                + dt * forces_wall[active_mask, 0]
                 + noise_x[active_mask]
             )
-            velocity[active_mask, t + 1, 1] = velocity[active_mask, t, 1] + (1/M) * (
-                - dt * velocity[active_mask, t, 1] 
-                + dt * forces_self_propulsion[active_mask, 1] 
-                + dt * forces_chemotaxis[active_mask, 1] 
-                + dt * forces_interaction_sum[active_mask, 1] 
-                + dt * forces_wall[active_mask, 1] 
+            velocity[active_mask, t + 1, 1] = velocity[active_mask, t, 1] + (1 / M) * (
+                -dt * velocity[active_mask, t, 1]
+                + dt * forces_self_propulsion[active_mask, 1]
+                + dt * forces_chemotaxis[active_mask, 1]
+                + dt * forces_interaction_sum[active_mask, 1]
+                + dt * forces_wall[active_mask, 1]
                 + noise_y[active_mask]
             )
 
             # Angular
-            theta[active_mask, t + 1] = theta[active_mask, t] + dt * ang_velocity[active_mask, t]
-            ang_velocity[active_mask, t + 1] = ang_velocity[active_mask, t] + (1/J) * (
-                - dt * ang_velocity[active_mask, t] 
-                + dt * self_propulsion_frequency 
+            theta[active_mask, t + 1] = (
+                theta[active_mask, t] + dt * ang_velocity[active_mask, t]
+            )
+            ang_velocity[active_mask, t + 1] = ang_velocity[active_mask, t] + (
+                1 / J
+            ) * (
+                -dt * ang_velocity[active_mask, t]
+                + dt * self_propulsion_frequency
                 + noise_theta[active_mask]
             )
         else:
-
-            # --- 2. Vectorized Maze Wall Collision (Killing step) ---
-            # Find positions of active particles to check if they hit a wall
-            px_bins = np.rint(position[:, t, 0] / dx).astype(int)
-            py_bins = np.rint(position[:, t, 1] / dx).astype(int)
-
-            # Check bounds safely, and see if current or neighboring maze cells are walls (0)
-            # This evaluates for ALL particles simultaneously
-            hit_wall = active_mask & (
-                (maze[px_bins, py_bins] == 0) | 
-                (maze[px_bins + 1, py_bins] == 0) | (maze[px_bins - 1, py_bins] == 0) | 
-                (maze[px_bins, py_bins + 1] == 0) | (maze[px_bins, py_bins - 1] == 0)
+            # --- Update Remaining Active Particles ---
+            position[active_mask, t + 1, 0] = position[active_mask, t, 0] + (
+                dt * forces_self_propulsion[active_mask, 0]
+                + dt * forces_chemotaxis[active_mask, 0]
+                + dt * forces_interaction_sum[active_mask, 0]
+                + dt * forces_wall[active_mask, 0]
+                + noise_x[active_mask]
+            )
+            position[active_mask, t + 1, 1] = position[active_mask, t, 1] + (
+                dt * forces_self_propulsion[active_mask, 1]
+                + dt * forces_chemotaxis[active_mask, 1]
+                + dt * forces_interaction_sum[active_mask, 1]
+                + dt * forces_wall[active_mask, 1]
+                + noise_y[active_mask]
             )
 
-            # If they hit a wall, mark them in the dead_tracker so they stop computing next frames
-            if np.any(hit_wall):
-                dead_tracker[hit_wall] = True
-                position[hit_wall, t:, :] = np.nan
-                velocity[hit_wall, t:, :] = np.nan
-                # Update active mask dynamically for the rest of this frame step
-                active_mask = active_mask & ~hit_wall 
-
-            # --- 3. Update Remaining Active Particles ---
-            position[active_mask, t + 1, 0] = position[active_mask, t, 0] + (dt * forces_self_propulsion[active_mask, 0] + dt * forces_chemotaxis[active_mask, 0] + dt * forces_interaction_sum[active_mask, 0] + dt * forces_wall[active_mask, 0] + noise_x[active_mask])
-            position[active_mask, t + 1, 1] = position[active_mask, t, 1] + (dt * forces_self_propulsion[active_mask, 1] + dt * forces_chemotaxis[active_mask, 1] + dt * forces_interaction_sum[active_mask, 1] + dt * forces_wall[active_mask, 1] + noise_y[active_mask])
-
-            theta[active_mask, t + 1] = theta[active_mask, t] + (dt * self_propulsion_frequency + noise_theta[active_mask])
+            theta[active_mask, t + 1] = theta[active_mask, t] + (
+                dt * self_propulsion_frequency + noise_theta[active_mask]
+            )
 
             # Calculate velocities based on position change
-            velocity[active_mask, t + 1, 0] = (position[active_mask, t + 1, 0] - position[active_mask, t, 0]) / dt
-            velocity[active_mask, t + 1, 1] = (position[active_mask, t + 1, 1] - position[active_mask, t, 1]) / dt
-            ang_velocity[active_mask, t + 1] = (theta[active_mask, t + 1] - theta[active_mask, t]) / dt
-        
+            velocity[active_mask, t + 1, 0] = (
+                position[active_mask, t + 1, 0] - position[active_mask, t, 0]
+            ) / dt
+            velocity[active_mask, t + 1, 1] = (
+                position[active_mask, t + 1, 1] - position[active_mask, t, 1]
+            ) / dt
+            ang_velocity[active_mask, t + 1] = (
+                theta[active_mask, t + 1] - theta[active_mask, t]
+            ) / dt
         # Write concentration and particle data at specified intervals
-        if timestep==0:
+        if timestep == 0:
             write_parameters(**kwargs)
             write_grid(grid_filename, nx, ny)
-        
+
         if timestep % write_every == 0:
             write_concentration(file_prefix_conc, c, [timestep], n_steps)
-            write_particles(file_prefix_part, position, theta, velocity, ang_velocity,
-                            forces_self_propulsion, forces_chemotaxis, forces_interaction, forces_wall,
-                            [timestep], num_particles, n_steps)
-        
-        if exit_condition(position, num_particles, timestep, n_steps, exit_times, exit_point=static_source_position, exit_radius=exit_radius):
+            write_particles(
+                file_prefix_part,
+                position,
+                theta,
+                velocity,
+                ang_velocity,
+                forces_self_propulsion,
+                forces_chemotaxis,
+                forces_interaction,
+                forces_wall,
+                [timestep],
+                num_particles,
+                n_steps,
+            )
+
+        if exit_condition(
+            timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker
+        ):
             write_concentration(file_prefix_conc, c, [timestep], n_steps)
-            write_particles(file_prefix_part, position, theta, velocity, ang_velocity,
-                            forces_self_propulsion, forces_chemotaxis, forces_interaction, forces_wall,
-                            [timestep], num_particles, n_steps)
-            exit=True
+            write_particles(
+                file_prefix_part,
+                position,
+                theta,
+                velocity,
+                ang_velocity,
+                forces_self_propulsion,
+                forces_chemotaxis,
+                forces_interaction,
+                forces_wall,
+                [timestep],
+                num_particles,
+                n_steps,
+            )
+            exit = True
             exit_timestep = timestep
             break
-            
-    return c, position, theta, velocity, ang_velocity, f_sp, f_chem, f_int, f_wall, exit, exit_timestep
+
+    return (
+        c,
+        position,
+        theta,
+        velocity,
+        ang_velocity,
+        f_sp,
+        f_chem,
+        f_int,
+        f_wall,
+        exit,
+        exit_timestep,
+    )
 
 
 

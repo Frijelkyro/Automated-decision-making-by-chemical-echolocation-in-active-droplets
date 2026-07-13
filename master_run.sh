@@ -73,42 +73,42 @@ mkdir --parents ./output/videos
 # =====================================================================
 # SECTION 1: Varying Particle Counts
 # =====================================================================
-#for N in 1; do
-## for N in 1 2 4 10; do
-#    echo "=== Running simulation for N = $N particles ==="
-#    mkdir --parents ./output/"$N"_particles
-#    
-#    # Update the python script with the current particle count
-#    sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $N # Number of particles/" maze_cluster_script.py
-#    
-#    for i in {1..50}; do
-#    # for i in {i..50}; do
-#        printf -v padded "%02d" $i
-#        rm -f ./data/conc*.txt ./data/part*.txt
-#        
-#        python maze_cluster_script.py
-#        
-#        if [ $? -ne 0 ]; then
-#            # Calling the recovery function for Section 1
-#            process_crash_recovery "./output/${N}_particles/crash_logs/${padded}/data"
-#        fi
-#        if [ $i -le 5 ]; then
-#            python video_maker.py
-#            cp ./data/particle_trajectory.mp4 "./output/instant_release/"$N"_particles/${N}_particles_trajectory_$padded.mp4"
-#        fi
-#        if [ $i -eq 25 ]; then
-#            echo "interation number: 25"
-#        fi
-#    done
-#    ls -la data/ # | grep exit_times 
-#
-#    mkdir output/xbucket
-#    echo "# exit_times.txt, Simultaneuos Release, N: ${N}"
-#    cat exit_times.txt >> output/xbucket/recover_data.txt
-#    mv ./data/exit_times.txt ./output/instant_release/"$N"_particles/
-#done
-#
-#echo "All particle number simulations complete!"
+for N in 1; do
+# for N in 1 2 4 10; do
+    echo "=== Running simulation for N = $N particles ==="
+    mkdir --parents ./output/"$N"_particles
+    
+    # Update the python script with the current particle count
+    sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $N # Number of particles/" maze_cluster_script.py
+    
+    for i in {1..50}; do
+    # for i in {i..50}; do
+        printf -v padded "%02d" $i
+        rm -f ./data/conc*.txt ./data/part*.txt
+        
+        python maze_cluster_script.py
+        
+        if [ $? -ne 0 ]; then
+            # Calling the recovery function for Section 1
+            process_crash_recovery "./output/${N}_particles/crash_logs/${padded}/data"
+        fi
+        if [ $i -le 5 ]; then
+            python video_maker.py
+            cp ./data/particle_trajectory.mp4 "./output/instant_release/"$N"_particles/${N}_particles_trajectory_$padded.mp4"
+        fi
+        if [ $i -eq 25 ]; then
+            echo "interation number: 25"
+        fi
+    done
+    ls -la data/ # | grep exit_times 
+
+    mkdir output/xbucket
+    echo "# exit_times.txt, Simultaneuos Release, N: ${N}"
+    cat exit_times.txt >> output/xbucket/recover_data.txt
+    mv ./data/exit_times.txt ./output/instant_release/"$N"_particles/
+done
+
+echo "All particle number simulations complete!"
 
 
 # =====================================================================
@@ -116,14 +116,29 @@ mkdir --parents ./output/videos
 # =====================================================================
 #for ER in 0.25 0.5 1 2 4 10; do
 # timestep_list = [ (0.25,1*10**-3) 0.5, 0.25*10**-3) 1, 0.25*10**-3) (2, 0.25*10**-3) (4, 0.10) (10, 0.01)]
-for ER in 10 20; do
+for ER in 0.25 0.5 1 2 4 10; do
     DT=0.25  # Timestep in milliseconds (*10**-3)
     CALCULATED_PARTICLES=$(echo "$ER * 100" | bc | cut -d'.' -f1)
     echo "=== Running simulation: emission_rate = $ER ($CALCULATED_PARTICLES particles) ==="
     mkdir --parents ./output/"${ER}"_emission_rate
 
+    if [ $ER -eq 0.25 ]; then
+        DT=0.5
+    fi
+    if [ $ER -eq 0.5 ]; then
+        DT=0.25
+    fi
+    if [ $ER -eq 1 ]; then
+        DT=0.25
+    fi
+    if [ $ER -eq 2 ]; then
+        DT=0.1
+    fi
+    if [ $ER -eq 4 ]; then
+        DT=0.5
+    fi
     if [ $ER -eq 10 ]; then
-        DT=0.010
+        DT=0.01
     fi
     
     sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $CALCULATED_PARTICLES # Number of particles/" maze_cluster_script.py
@@ -133,14 +148,14 @@ for ER in 10 20; do
     
     rm data/exit_times.txt
 
-    for i in {1..3}; do
+    for i in {1..50}; do
         printf -v padded "%02d" $i
         rm -f data/conc*.txt data/part*.txt
         
         python maze_cluster_script.py
         exit_status=$?
 
-        if [ $? -ne 0 ]; then
+        if [ $exit_status -ne 0 ]; then
             # Calling the same recovery function for Section 2
             process_crash_recovery "./output/${ER}_emission_rate/crash_logs/${padded}/data"
         fi

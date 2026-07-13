@@ -517,9 +517,31 @@ def chemical_solver(
     for timestep in range(start_step, start_step + nt - 1):
         t = timestep % nt
 
+        # Define minimum safe distance for a new particle to spawn (e.g., 2 grid units)
+        min_clearance = 2.0 * dx  
+
         new_births = birth_steps == timestep
+        
         if np.any(new_births):
-            active_mask[new_births] = True
+            is_clear = True
+            
+            # If there are already active particles, check their distance to the emitter
+            if np.any(active_mask):
+                # Calculate Euclidean distance of all active particles to the emitter_position
+                dist_to_emitter = np.linalg.norm(position[active_mask, t, :] - emitter_position, axis=1)
+                
+                # If the closest particle is within the clearance zone, it's not clear
+                if np.min(dist_to_emitter) < min_clearance:
+                    is_clear = False
+            
+            if is_clear:
+                # Activate the particles
+                active_mask[new_births] = True
+            else:
+                # The site is blocked. Delay the scheduled birth by 1 timestep.
+                # It will try again on the next loop iteration.
+                birth_steps[new_births] += 1
+                
         active_mask[dead_tracker] = False
 
         if np.any(active_mask):
