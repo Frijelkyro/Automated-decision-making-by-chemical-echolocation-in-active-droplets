@@ -43,14 +43,14 @@ Lx = 100.0  # domain size
 Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
-n_steps = 4000  # number of time steps 40000
-dt = 1 * 10 ** (-3)  # time step size
+n_steps = 300  # number of time steps 40000
+dt = 0.25 * 10 ** (-3)  # time step size
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
-time_loop = 500  # number of time loops
+time_loop = 100  # number of time loops
 time = np.arange(0, time_loop * n_steps, 1) * dt
 time = time[np.newaxis, :]
 total_time = dt * time_loop * n_steps  # total time of the simulation
-write_every = 100  # write output after every this many time steps
+write_every = 400  # write output after every this many time steps
 
 # Data directory
 data = "data"  # for linux
@@ -84,8 +84,8 @@ death_zone_map = exit_zone_map
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 1 # Number of particles
-emission_rate = 0.25  # droplets per second
+num_particles = 2000 # Number of particles
+emission_rate = 20 # droplets per second
 
 # Calculate arrays safely using the master num_particles variable
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
@@ -93,7 +93,8 @@ v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 
-emitter_position = np.array([4.0, 82.0], dtype=np.float32)
+emitter_position = np.array([4.1, 82.1], dtype=np.float32)
+emitter_position = np.array([52.5,12.5], dtype=float)
 
 exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
 active_mask = np.zeros(num_particles, dtype=bool)
@@ -195,7 +196,7 @@ for i in range(time_loop):
             ),
             axis=-1,
         )
-        full_traj = np.append(full_traj, current_traj, axis=1)
+        # full_traj = np.append(full_traj, current_traj, axis=1)
         conc[-1, :, :] = conc[exit_timestep % n_steps, :, :]
         break
     current_time = np.repeat(
@@ -215,7 +216,7 @@ for i in range(time_loop):
         ),
         axis=-1,
     )
-    full_traj = np.append(full_traj, current_traj, axis=1)
+    # full_traj = np.append(full_traj, current_traj, axis=1)
     conc[0, :, :] = conc[-1, :, :]
     p[:, 0, :] = p[:, -1, :]
     theta[:, 0] = theta[:, -1]
@@ -251,17 +252,18 @@ column_names = [
 job_id = 1  # sys.argv[1]
 
 # Create the filename using the job ID
-filename1 = data + f"/full_traj_{job_id}.txt"
+# filename1 = data + f"/full_traj_{job_id}.txt"
 # Save the full trajectory with a header
-full_traj_write_every = 1
-if exit:
-    np.savetxt(
-        filename1,
-        full_traj[0][::full_traj_write_every],
-        fmt="%.4f",
-        header=" ".join(column_names),
-        comments="",
-    )
+# full_traj_write_every = 1
+# if exit:
+#     np.savetxt(
+#         filename1,
+#         full_traj[0][::full_traj_write_every],
+#         fmt="%.4f",
+#         header=" ".join(column_names),
+#         comments="",
+#     )
+# 
 
 filename2 = data + "/exit_times.txt"
 # Check if the file exists
