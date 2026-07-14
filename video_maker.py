@@ -44,6 +44,7 @@ import re
 from matplotlib.colors import Normalize
 import matplotlib.patches as patches
 import glob
+from datetime import datetime
 
 sys.path.append(os.path.join(os.getcwd(), "trajectory_video"))
 from maze_functions import maze_from_file, load_c_from_file, load_traj_from_file
@@ -138,6 +139,16 @@ ax.text(
     va="bottom",
     backgroundcolor="white",
 )
+datetime_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+ax.text(
+    0.5, 0.99, f"Compiled: {datetime_time}", 
+    transform=ax.transAxes, 
+    fontsize=8, 
+    color='gray', 
+    ha='center', # Aligns the horizontal center of the text
+    va='top'     # Aligns the top of the text to the top boundary
+)
+
 # Green circle: radius = 20, thin line (linewidth=1 or 0.5)
 circle_green = plt.Circle(
     (source[0], source[1]), radius=20, color="green", fill=False, linewidth=1
@@ -147,6 +158,12 @@ ax.add_patch(circle_green)
 # Red circle: radius = 18, thin line
 circle_red = plt.Circle((source[0], source[1]), radius=18, color='red', fill=False, linewidth=1)
 ax.add_patch(circle_red)
+
+# Lock the viewing window to the exact dimensions of the maze.
+ax.set_xlim(0, 99)
+
+# where the Y-axis starts at 0 at the top and goes down, invert this to (110, 0).
+ax.set_ylim(0, 110)
 
 # Rectangluar exit zones
 # zones = [(0, 35, 94, 98), (0, 4, 50, 98)]
