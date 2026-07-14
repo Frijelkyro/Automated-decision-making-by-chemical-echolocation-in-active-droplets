@@ -144,33 +144,34 @@ circle_green = plt.Circle(
 )
 ax.add_patch(circle_green)
 
-# Red circle: radius = 30, thin line
-# circle_red = plt.Circle((source[0], source[1]), radius=20, color='red', fill=False, linewidth=1)
-# ax.add_patch(circle_red)
+# Red circle: radius = 18, thin line
+circle_red = plt.Circle((source[0], source[1]), radius=18, color='red', fill=False, linewidth=1)
+ax.add_patch(circle_red)
 
-zones = [(0, 35, 94, 98), (0, 4, 50, 98)]
-# Convert grid indices to spatial coordinates and add outlines to the plot
-for y1, y2, x1, x2 in zones:
-    # 1. Calculate the real-world corner coordinate (lower-left)
-    xy_corner = (x1 * 1, y1 * 1)
-
-    # 2. Calculate the dimensions
-    width = (x2 - x1) * 1
-    height = (y2 - y1) * 1
-
-    # 3. Create the rectangle patch
-    rect = patches.Rectangle(
-        xy_corner,
-        width,
-        height,
-        linewidth=1,  # Thin outline
-        edgecolor="r",  # Red
-        facecolor="none",  # Transparent fill
-        linestyle="-",  # Solid line
-    )
-
-    # 4. Add the patch to the axes
-    ax.add_patch(rect)
+# Rectangluar exit zones
+# zones = [(0, 35, 94, 98), (0, 4, 50, 98)]
+# # Convert grid indices to spatial coordinates and add outlines to the plot
+# for y1, y2, x1, x2 in zones:
+#     # 1. Calculate the real-world corner coordinate (lower-left)
+#     xy_corner = (x1 * 1, y1 * 1)
+# 
+#     # 2. Calculate the dimensions
+#     width = (x2 - x1) * 1
+#     height = (y2 - y1) * 1
+# 
+#     # 3. Create the rectangle patch
+#     rect = patches.Rectangle(
+#         xy_corner,
+#         width,
+#         height,
+#         linewidth=1,  # Thin outline
+#         edgecolor="r",  # Red
+#         facecolor="none",  # Transparent fill
+#         linestyle="-",  # Solid line
+#     )
+# 
+#     # 4. Add the patch to the axes
+#     ax.add_patch(rect)
 
 # Ensure the aspect ratio is equal so the circles don't look like ovals
 ax.set_aspect("equal")

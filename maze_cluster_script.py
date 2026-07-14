@@ -78,14 +78,14 @@ death_zone_map = np.zeros_like(maze, dtype=bool)
 X, Y = np.indices(maze.shape)
 cx, cy = np.rint(np.array(static_source_position) / dx)
 exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
-death_zone_map = exit_zone_map
+death_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius*0.9 / dx) ** 2
 
 
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 2000 # Number of particles
-emission_rate = 20 # droplets per second
+num_particles = 25 # Number of particles
+emission_rate = 0.25 # droplets per second
 
 # Calculate arrays safely using the master num_particles variable
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
