@@ -392,7 +392,7 @@ def write_particles(
 def exit_condition(timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker):
     # A particle exits if it lands on a True cell in the exit map,
     # hasn't exited yet, and isn't dead.
-    new_exits = exit_zone_map[px_bins, py_bins] & (exit_times == 0.0) & ~dead_tracker
+    new_exits = exit_zone_map[px_bins, py_bins] & (exit_times == 0.0)
 
     if np.any(new_exits):
         print(f"{np.sum(new_exits)} particle(s) reached the exit region!")
@@ -522,6 +522,7 @@ def chemical_solver(
 
         new_births = birth_steps == timestep
         
+        # Particles will only enter the maze if the emitter_position is free of other particles if not, the emission is delayed
         if np.any(new_births):
             is_clear = True
             
@@ -541,26 +542,6 @@ def chemical_solver(
                 # The site is blocked. Delay the scheduled birth by 1 timestep.
                 # It will try again on the next loop iteration.
                 birth_steps[new_births] += 1
-                
-        active_mask[dead_tracker] = False
-
-        if np.any(active_mask):
-            # Calculate bins ONLY for active particles to safely avoid NaNs
-            px_bins[active_mask] = np.rint(position[active_mask, t, 0] / dx).astype(int)
-            py_bins[active_mask] = np.rint(position[active_mask, t, 1] / dx).astype(int)
-
-            # Clip only the active indices safely within maze boundaries
-            px_bins[active_mask] = np.clip(px_bins[active_mask], 0, maze.shape[0] - 1)
-            py_bins[active_mask] = np.clip(py_bins[active_mask], 0, maze.shape[1] - 1)
-
-        hit_exit_zone = active_mask & death_zone_map[px_bins, py_bins]
-
-        if np.any(hit_exit_zone):
-            dead_tracker[hit_exit_zone] = True
-            position[hit_exit_zone, t:, :] = np.nan
-            velocity[hit_exit_zone, t:, :] = np.nan
-
-        active_mask[dead_tracker] = False
 
         inactive_mask = ~active_mask
         position[inactive_mask, t + 1, :] = position[inactive_mask, t, :]
@@ -747,6 +728,24 @@ def chemical_solver(
             ang_velocity[active_mask, t + 1] = (
                 theta[active_mask, t + 1] - theta[active_mask, t]
             ) / dt
+        
+        if np.any(active_mask):
+            px_bins[active_mask] = np.rint(position[active_mask, t, 0] / dx).astype(int)
+            py_bins[active_mask] = np.rint(position[active_mask, t, 1] / dx).astype(int)
+
+            # Clip indices safely within maze boundaries
+            px_bins[active_mask] = np.clip(px_bins[active_mask], 0, maze.shape[0] - 1)
+            py_bins[active_mask] = np.clip(py_bins[active_mask], 0, maze.shape[1] - 1)
+
+        hit_exit_zone = active_mask & death_zone_map[px_bins, py_bins]
+
+        if np.any(hit_exit_zone):
+            dead_tracker[hit_exit_zone] = True
+            position[hit_exit_zone, t:, :] = np.nan
+            velocity[hit_exit_zone, t:, :] = np.nan
+
+        active_mask[dead_tracker] = False
+
         # Write concentration and particle data at specified intervals
         if timestep == 0:
             write_parameters(**kwargs)
