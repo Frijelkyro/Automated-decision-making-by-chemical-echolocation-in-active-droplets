@@ -117,36 +117,30 @@ echo "All particle number simulations complete!"
 #for ER in 0.25 0.5 1 2 4 10; do
 # timestep_list = [ (0.25,1*10**-3) 0.5, 0.25*10**-3) 1, 0.25*10**-3) (2, 0.25*10**-3) (4, 0.10) (10, 0.01)]
 for ER in 0.25 0.5 1 2 4 10; do
-    DT=0.25  # Timestep in milliseconds (*10**-3)
+    # Calculate particles
     CALCULATED_PARTICLES=$(echo "$ER * 100" | bc | cut -d'.' -f1)
     echo "=== Running simulation: emission_rate = $ER ($CALCULATED_PARTICLES particles) ==="
-    mkdir --parents ./output/"${ER}"_emission_rate
+    mkdir --parents "./output/${ER}_emission_rate"
 
-    if [ $ER -eq 0.25 ]; then
-        DT=0.5
-    fi
-    if [ $ER -eq 0.5 ]; then
-        DT=0.25
-    fi
-    if [ $ER -eq 1 ]; then
-        DT=0.25
-    fi
-    if [ $ER -eq 2 ]; then
-        DT=0.1
-    fi
-    if [ $ER -eq 4 ]; then
-        DT=0.5
-    fi
-    if [ $ER -eq 10 ]; then
-        DT=0.01
-    fi
+    # Use a case statement instead of integer comparison for floats
+    case "$ER" in
+        0.25) DT=0.5 ;;
+        0.5)  DT=0.25 ;;
+        1)    DT=0.25 ;;
+        2)    DT=0.1 ;;
+        4)    DT=0.5 ;;
+        10)   DT=0.01 ;;
+        *)    DT=0.25 ;; # Default fallback just in case
+    esac
     
+    # Update Python script
     sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $CALCULATED_PARTICLES # Number of particles/" maze_cluster_script.py
     sed -i -E "s/^emission_rate = [0-9.]+(\s*#.*)?\$/emission_rate = $ER # droplets per second/" maze_cluster_script.py
     sed -i -E "s/^dt = .*/dt = $DT * 10 ** (-3)  # time step size/" maze_cluster_script.py
-    cat maze_cluster_script.py | grep "dt =" 
+    grep "dt =" maze_cluster_script.py 
     
-    rm data/exit_times.txt
+    # Safely remove exit times without throwing an error if it doesn't exist
+    rm -f data/exit_times.txt
 
     for i in {1..50}; do
         printf -v padded "%02d" $i
@@ -156,18 +150,20 @@ for ER in 0.25 0.5 1 2 4 10; do
         exit_status=$?
 
         if [ $exit_status -ne 0 ]; then
-            # Calling the same recovery function for Section 2
             process_crash_recovery "./output/${ER}_emission_rate/crash_logs/${padded}/data"
         fi
 
         if [ $i -eq 1 ]; then
             python video_maker.py
-            cp ./data/particle_trajectory.mp4 ./output/"${ER}"_emission_rate/"${ER}"_emission_trajectory_"${padded}".mp4
+            cp ./data/particle_trajectory.mp4 "./output/${ER}_emission_rate/${ER}_emission_trajectory_${padded}.mp4"
         fi
-
     done
     
-    cp ./data/exit_times.txt ./output/"${ER}"_emission_rate/
+    if [ -f ./data/exit_times.txt ]; then
+        cp ./data/exit_times.txt "./output/${ER}_emission_rate/"
+    else
+        echo "Warning: exit_times.txt not found for ER=$ER"
+    fi
 done
 
 echo "All emission rate simulations complete!"
