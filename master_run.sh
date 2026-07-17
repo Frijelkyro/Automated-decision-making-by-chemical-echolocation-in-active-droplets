@@ -18,33 +18,37 @@ process_crash_recovery() {
     local time_increment
     time_increment=$(awk '/^dt:[[:space:]]*/ {print $2}' data/param.txt)
 
-    # 3. Extract all numbers, sort numerically (-n), and grab the bottom one
-    local max_timestep_file
-    max_timestep_file=$(ls data/part_*.txt 2>/dev/null | sed 's/[^0-9]//g' | sort -n | tail -n 1)
+    # 3. Extract all numbers, sort numerically for ascending and descending arrays
+    local all_timesteps_asc=($(ls data/part_*.txt 2>/dev/null | sed 's/[^0-9]//g' | sort -n))
+    local all_timesteps_desc=($(ls data/part_*.txt 2>/dev/null | sed 's/[^0-9]//g' | sort -rn))
     
-    if [ -z "$max_timestep_file" ]; then
+    if [ ${#all_timesteps_asc[@]} -eq 0 ]; then
         echo "Error: No data files found to process."
         return 1
     fi
     
-    # 4. Find ordered array of particle IDs that are "nan" in the final step
-    local nan_particles
-    nan_particles=($(awk '$1 ~ /^[0-9]{1,4}$/ && $2 == "nan" {print $1}' "data/part_${max_timestep_file}.txt" | sort -n))
+    local first_timestep_file="${all_timesteps_asc[0]}"
+    local max_timestep_file="${all_timesteps_desc[0]}"
+    
+    # 4. Get the un-injected "baseline" coordinates (last particle's position in step 0)
+    local baseline_coords=($(awk '$1 ~ /^[0-9]+$/ {x=$2; y=$3} END {print x, y}' "data/part_${first_timestep_file}.txt"))
+    local base_x="${baseline_coords[0]}"
+    local base_y="${baseline_coords[1]}"
+    
+    # 5. Find ordered array of particle IDs that are "nan" in the final step
+    local nan_particles=($(awk '$1 ~ /^[0-9]{1,4}$/ && $2 == "nan" {print $1}' "data/part_${max_timestep_file}.txt" | sort -n))
 
     if [[ ! -f "$output_file" ]]; then
         echo "ExitTime Beta JobID ParticleID" > "$output_file"
     fi
 
-
-    # Extract all numbers, and sort them reverse-numerically (-rn).
-    local all_timesteps
-    all_timesteps=($(ls data/part_*.txt 2>/dev/null | sed 's/[^0-9]//g' | sort -rn))
-    # 5. Scan backwards to find when each nan particle exited
+    # 6. Process each exited particle
     for pid in "${nan_particles[@]}"; do
         local exit_timestep=""
+        local start_timestep=""
         
-        for ts in "${all_timesteps[@]}"; do
-            # Simple, fast match query
+        # --- A. Scan BACKWARDS to find the last known position before exiting ---
+        for ts in "${all_timesteps_desc[@]}"; do
             local status
             status=$(awk -v id="$pid" '$1 == id { print ($2 != "nan" && $2 != "") ? "MATCH" : "NAN"; exit }' "data/part_${ts}.txt")
             
@@ -55,8 +59,34 @@ process_crash_recovery() {
         done
 
         if [ -n "$exit_timestep" ]; then
+            # --- B. Scan FORWARDS to find the first active movement ---
+            for ts in "${all_timesteps_asc[@]}"; do
+                local moved
+                moved=$(awk -v id="$pid" -v bx="$base_x" -v by="$base_y" '
+                    $1 == id {
+                        # A particle is active if it is not nan AND its coordinates do not match the baseline
+                        if ($2 != "nan" && $2 != "" && ($2 != bx || $3 != by)) {
+                            print "MOVED"
+                        } else {
+                            print "WAIT"
+                        }
+                        exit
+                    }' "data/part_${ts}.txt")
+                
+                if [ "$moved" = "MOVED" ]; then
+                    start_timestep="$ts"
+                    break
+                fi
+            done
+            
+            # Failsafe: if no movement was detected, default to the very first file
+            if [ -z "$start_timestep" ]; then
+                start_timestep="$first_timestep_file"
+            fi
+
+            # --- C. Calculate the delta and append ---
             local exit_time
-            exit_time=$(echo "$exit_timestep * $time_increment" | bc -l)
+            exit_time=$(echo "($exit_timestep - $start_timestep) * $time_increment" | bc -l)
             printf "%.3f -8 1 %d\n" "$exit_time" "$pid" >> "$output_file"
         else
             printf "-1 -8 1 %d\n" "$pid" >> "$output_file"
