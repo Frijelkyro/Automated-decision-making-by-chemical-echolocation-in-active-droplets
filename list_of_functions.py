@@ -458,6 +458,7 @@ def chemical_solver(
         kwargs.get("emitter_position", (0.0, 0.0)), dtype=np.float32
     )
     permeability = kwargs.get("permeability", 0.0)
+    drops_added_incremental = kwargs.get("drops_added_incremental", True)
     exit_wall_mask = kwargs.get("exit_wall_mask", None)
 
     nt, nx, ny = c.shape
@@ -517,31 +518,37 @@ def chemical_solver(
     for timestep in range(start_step, start_step + nt - 1):
         t = timestep % nt
 
-        # Define minimum safe distance for a new particle to spawn (e.g., 2 grid units)
-        min_clearance = 2.0 * dx  
+        if drops_added_incremental:
+            new_births = birth_steps == timestep
+            min_clearance = 1.5 * dx 
 
-        new_births = birth_steps == timestep
-        
-        # Particles will only enter the maze if the emitter_position is free of other particles if not, the emission is delayed
-        if np.any(new_births):
-            is_clear = True
-            
-            # If there are already active particles, check their distance to the emitter
-            if np.any(active_mask):
-                # Calculate Euclidean distance of all active particles to the emitter_position
-                dist_to_emitter = np.linalg.norm(position[active_mask, t, :] - emitter_position, axis=1)
-                
-                # If the closest particle is within the clearance zone, it's not clear
-                if np.min(dist_to_emitter) < min_clearance:
-                    is_clear = False
-            
-            if is_clear:
-                # Activate the particles
-                active_mask[new_births] = True
-            else:
-                # The site is blocked. Delay the scheduled birth by 1 timestep.
-                # It will try again on the next loop iteration.
-                birth_steps[new_births] += 1
+            spawning_indices = np.where(new_births)[0]  # indices of particles trying to spawn right now
+            if len(spawning_indices) > 0:
+                is_clear = True
+
+                if np.any(active_mask):
+                    # Pre-extract active positions for speed
+                    active_positions = position[active_mask, t, :]
+
+                    # Vectorized distance calculation to the single emitter point
+                    dist_to_emitter = np.linalg.norm(active_positions - emitter_position, axis=1)
+
+                    if np.min(dist_to_emitter) < min_clearance:
+                        is_clear = False
+
+                if is_clear:
+                    first_particle_idx = spawning_indices[0]
+                    active_mask[first_particle_idx] = True  # Spawn the first particle in the queue
+
+                    # Delay the rest (if any) because they can't occupy the exact same spot
+                    if len(spawning_indices) > 1:
+                        birth_steps[spawning_indices[1:]] += 1
+                else:
+                    # The emitter is blocked; delay EVERYONE in the queue
+                    birth_steps[spawning_indices] += 1
+        else:
+            if timestep == 0:
+                active_mask[:] = True
 
         inactive_mask = ~active_mask
         position[inactive_mask, t + 1, :] = position[inactive_mask, t, :]

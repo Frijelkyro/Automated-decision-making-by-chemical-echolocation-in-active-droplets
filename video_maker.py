@@ -45,6 +45,7 @@ from matplotlib.colors import Normalize
 import matplotlib.patches as patches
 import glob
 from datetime import datetime
+from matplotlib.collections import LineCollection
 
 sys.path.append(os.path.join(os.getcwd(), "trajectory_video"))
 from maze_functions import maze_from_file, load_c_from_file, load_traj_from_file

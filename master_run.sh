@@ -73,16 +73,26 @@ mkdir --parents ./output/videos
 # =====================================================================
 # SECTION 1: Varying Particle Counts
 # =====================================================================
-for N in 1; do
-# for N in 1 2 4 10; do
+for N in 1 2 4; do
     echo "=== Running simulation for N = $N particles ==="
-    mkdir --parents ./output/"$N"_particles
     
+    # FIXED: Added instant_release to path to match the cp/mv commands below
+    mkdir --parents "./output/instant_release/${N}_particles"
+
+    # FIXED: Corrected sed syntax with .* and trailing /
+    sed -i -E "s/^drops_added_incremental =.*/drops_added_incremental = False/" maze_cluster_script.py
+        
+    case "$N" in
+        10)   DT=0.05 ;;
+        *)    DT=0.25 ;;
+    esac
+
     # Update the python script with the current particle count
     sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $N # Number of particles/" maze_cluster_script.py
-    
+    sed -i -E "s/^dt = .*/dt = $DT * 10 ** (-3)  # time step size/" maze_cluster_script.py
+    grep "dt = " maze_cluster_script.py
+
     for i in {1..50}; do
-    # for i in {i..50}; do
         printf -v padded "%02d" $i
         rm -f ./data/conc*.txt ./data/part*.txt
         
@@ -90,22 +100,21 @@ for N in 1; do
         
         if [ $? -ne 0 ]; then
             # Calling the recovery function for Section 1
-            process_crash_recovery "./output/${N}_particles/crash_logs/${padded}/data"
+            process_crash_recovery "./output/instant_release/${N}_particles/crash_logs/${padded}/data"
         fi
         if [ $i -le 5 ]; then
             python video_maker.py
-            cp ./data/particle_trajectory.mp4 "./output/instant_release/"$N"_particles/${N}_particles_trajectory_$padded.mp4"
+            cp ./data/particle_trajectory.mp4 "./output/instant_release/${N}_particles/${N}_particles_trajectory_${padded}.mp4"
         fi
         if [ $i -eq 25 ]; then
             echo "interation number: 25"
         fi
     done
-    ls -la data/ # | grep exit_times 
 
-    mkdir output/xbucket
+    mkdir --parents output/xbucket
     echo "# exit_times.txt, Simultaneuos Release, N: ${N}"
-    cat exit_times.txt >> output/xbucket/recover_data.txt
-    mv ./data/exit_times.txt ./output/instant_release/"$N"_particles/
+    cat ./data/exit_times.txt >> output/xbucket/recover_data.txt
+    mv ./data/exit_times.txt "./output/instant_release/${N}_particles/"
 done
 
 echo "All particle number simulations complete!"
@@ -114,9 +123,10 @@ echo "All particle number simulations complete!"
 # =====================================================================
 # SECTION 2: Varying Emission Rate
 # =====================================================================
-#for ER in 0.25 0.5 1 2 4 10; do
-# timestep_list = [ (0.25,1*10**-3) 0.5, 0.25*10**-3) 1, 0.25*10**-3) (2, 0.25*10**-3) (4, 0.10) (10, 0.01)]
-for ER in 0.25 0.5 1 2 4 10; do
+# FIXED: Corrected sed syntax with .* and trailing /
+sed -i -E "s/^drops_added_incremental =.*/drops_added_incremental = True/" maze_cluster_script.py
+
+for ER in 0.25 0.50 1 2 4 10; do
     # Calculate particles
     CALCULATED_PARTICLES=$(echo "$ER * 100" | bc | cut -d'.' -f1)
     echo "=== Running simulation: emission_rate = $ER ($CALCULATED_PARTICLES particles) ==="
@@ -124,12 +134,12 @@ for ER in 0.25 0.5 1 2 4 10; do
 
     # Use a case statement instead of integer comparison for floats
     case "$ER" in
-        0.25) DT=0.5 ;;
-        0.5)  DT=0.25 ;;
+        0.25) DT=1.0 ;;
+        0.5)  DT=0.5 ;;
         1)    DT=0.25 ;;
-        2)    DT=0.1 ;;
-        4)    DT=0.5 ;;
-        10)   DT=0.01 ;;
+        2)    DT=0.12 ;;
+        4)    DT=0.08 ;; # 0.25
+        10)   DT=0.04 ;; # 0.10
         *)    DT=0.25 ;; # Default fallback just in case
     esac
     

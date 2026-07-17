@@ -36,6 +36,8 @@ massive_particle = True  # whether to include mass in the particle equation
 exit_radius = 20.0  # radius of the exit aroudn the target (static source)
 exit_wall_radius = 20.0  # radius for the leaky exit wall
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
+drops_added_incremental = True
+test_run = False
 
 # Simulation parameters
 dx = 1.0  # grid spacing
@@ -43,14 +45,17 @@ Lx = 100.0  # domain size
 Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
-n_steps = 3000  # number of time steps 40000
-dt = 0.25 * 10 ** (-3)  # time step size
+n_steps = 16000  # number of time steps 40000
+dt = 0.12 * 10 ** (-3)  # time step size
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
 time_loop = 100  # number of time loops
 time = np.arange(0, time_loop * n_steps, 1) * dt
 time = time[np.newaxis, :]
 total_time = dt * time_loop * n_steps  # total time of the simulation
-write_every = 400  # write output after every this many time steps
+write_every = 100  # write output after every this many time steps
+if test_run:
+    n_steps = 300
+    time_loop = 100
 
 # Data directory
 data = "data"  # for linux
@@ -69,6 +74,8 @@ file_prefix_part = data + "/part"
 
 # maze = maze_from_file('different_mazes/empty_box.tsv')
 maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet.tsv")
+if test_run:
+    maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv")
 # maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
 wall = np.transpose(np.where(maze == 0))
 death_zone_map = np.zeros_like(maze, dtype=bool)
@@ -78,14 +85,18 @@ death_zone_map = np.zeros_like(maze, dtype=bool)
 X, Y = np.indices(maze.shape)
 cx, cy = np.rint(np.array(static_source_position) / dx)
 exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
-death_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius*0.9 / dx) ** 2
+death_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius * 0.9 / dx) ** 2
 
 
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 25 # Number of particles
-emission_rate = 0.25 # droplets per second
+num_particles = 200 # Number of particles
+emission_rate = 2 # droplets per second
+
+exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
+active_mask = np.zeros(num_particles, dtype=bool)
+dead_tracker = np.zeros(num_particles, dtype=bool)
 
 # Calculate arrays safely using the master num_particles variable
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
@@ -94,46 +105,54 @@ theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 
 emitter_position = np.array([4.1, 82.1], dtype=np.float32)
-# emitter_position = np.array([52.5,12.5], dtype=np.float32)
+if test_run:
+    emitter_position = np.array([48.1, 14.8], dtype=np.float32)
 
-# min_separation = 0.8
-# initial_center = np.array([4.0, 82.0], dtype=np.float32)
-# initial_spread = 1.3
-# placed_positions = np.empty((0, 2), dtype=np.float32)
-# print_nearest_wall(maze, initial_center[0], initial_center[1])
-# for particle_id in range(num_particles):
-#     while True:
-#         candidate = np.random.uniform(initial_center - initial_spread,
-#                                       initial_center + initial_spread).astype(np.float32)
-#         if placed_positions.shape[0] == 0:
-#             break
-#         diffs = placed_positions - candidate
-#         dists = np.hypot(diffs[:, 0], diffs[:, 1])
-#         if np.all(dists >= min_separation):
-#             break
-#     p[particle_id, 0] = candidate
-#     placed_positions = np.vstack([placed_positions, candidate])
-#     v[particle_id, 0, 0] = 0.0  # Initial x-velocity
-#     v[particle_id, 0, 1] = 0.0  # Initial y-velocity
-#     theta[particle_id, 0] = np.random.uniform(0, 2.0 * np.pi)  # Initial angle
-#     omega[particle_id, 0] = 0.0  # Initial angular velocity
-# print("Initial positions initialized."+f"Placed positions:\n{placed_positions}")
-# 
+if drops_added_incremental:
+    # All particles start at the same emitter location and activate at delayed birth times.
+    p[:, 0, :] = emitter_position
+    v[:, 0, :] = 0.0
+    theta[:, 0] = np.random.uniform(0, 2.0 * np.pi, size=num_particles)
+    omega[:, 0] = 0.0
 
-exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
-active_mask = np.zeros(num_particles, dtype=bool)
-dead_tracker = np.zeros(num_particles, dtype=bool)
+    birth_steps = np.array(
+        [int(round(i / emission_rate / dt)) for i in range(num_particles)], dtype=int
+    )
 
-# All particles start at the same emitter location and activate at delayed birth times.
-p[:, 0, :] = emitter_position
-v[:, 0, :] = 0.0
-theta[:, 0] = np.random.uniform(0, 2.0 * np.pi, size=num_particles)
-omega[:, 0] = 0.0
-
-birth_steps = np.array(
-    [int(round(i / emission_rate / dt)) for i in range(num_particles)], dtype=int
-)
-print(f"Emitter position: {emitter_position}, birth steps: {birth_steps}")
+else:
+    max_attempts = 1000 # Prevent infinite loops
+    min_separation = 0.8
+    initial_spread = 1.3
+    placed_positions = np.empty((0, 2), dtype=np.float32)
+    print_nearest_wall(maze, emitter_position[0], emitter_position[1])
+    for particle_id in range(num_particles):
+        attempts = 0
+        placed_successfully = False
+        
+        while attempts < max_attempts:
+            candidate = np.random.uniform(
+                emitter_position - initial_spread, emitter_position + initial_spread
+            ).astype(np.float32)
+            
+            if placed_positions.shape[0] == 0:
+                placed_successfully = True
+                break
+                
+            diffs = placed_positions - candidate
+            dists = np.hypot(diffs[:, 0], diffs[:, 1])
+            
+            if np.all(dists >= min_separation):
+                placed_successfully = True
+                break
+                
+            attempts += 1
+        
+        if not placed_successfully:
+            raise ValueError(f"Could not fit particle {particle_id}. Increase initial_spread or decrease min_separation.")
+            
+        p[particle_id, 0] = candidate
+        placed_positions = np.vstack([placed_positions, candidate])
+    birth_steps = np.array([0 for i in range(num_particles)], dtype=int)
 
 # Create new map and display the result of chemical diffusion
 conc = initialize_c(c_initial, n_steps, maze)
@@ -184,6 +203,7 @@ parameter_dict = {
     "exit_radius": exit_radius,
     "exit_wall_mask": exit_wall_mask,
     "permeability": permeability,
+    "drops_added_incremental": drops_added_incremental
 }
 
 full_traj = np.empty((num_particles, 0, 15), dtype=np.float32)
@@ -287,7 +307,7 @@ job_id = 1  # sys.argv[1]
 #         header=" ".join(column_names),
 #         comments="",
 #     )
-# 
+#
 
 filename2 = data + "/exit_times.txt"
 # Check if the file exists
