@@ -391,7 +391,7 @@ def write_particles(
 
 def exit_condition(timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker):
     # A particle exits if it lands on a True cell in the exit map,
-    # hasn't exited yet, and isn't dead.
+    # hasn't exited yet
     new_exits = exit_zone_map[px_bins, py_bins] & (exit_times == 0.0)
 
     if np.any(new_exits):
@@ -737,15 +737,6 @@ def chemical_solver(
             px_bins[active_mask] = np.clip(px_bins[active_mask], 0, maze.shape[0] - 1)
             py_bins[active_mask] = np.clip(py_bins[active_mask], 0, maze.shape[1] - 1)
 
-        hit_exit_zone = active_mask & death_zone_map[px_bins, py_bins]
-
-        if np.any(hit_exit_zone):
-            dead_tracker[hit_exit_zone] = True
-            position[hit_exit_zone, t:, :] = np.nan
-            velocity[hit_exit_zone, t:, :] = np.nan
-
-        active_mask[dead_tracker] = False
-
         # Write concentration and particle data at specified intervals
         if timestep == 0:
             write_parameters(**kwargs)
@@ -768,9 +759,25 @@ def chemical_solver(
                 n_steps,
             )
 
-        if exit_condition(
-            timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker
-        ):
+        # exit condition (simplified)
+
+        hit_exit_zone = active_mask & death_zone_map[px_bins, py_bins]
+
+        if np.any(hit_exit_zone):
+            dead_tracker[hit_exit_zone] = True
+            position[hit_exit_zone, t:, :] = np.nan
+            velocity[hit_exit_zone, t:, :] = np.nan
+            exit_times[hit_exit_zone] = timestep
+
+        active_mask[dead_tracker] = False
+
+        # Check if all particles have successfully exited or died
+        has_exited_or_died = (exit_times > 0.0) | dead_tracker
+
+        # if exit_condition(
+        #     timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker
+        # ):
+        if np.all(has_exited_or_died):
             write_concentration(file_prefix_conc, c, [timestep], n_steps)
             write_particles(
                 file_prefix_part,
