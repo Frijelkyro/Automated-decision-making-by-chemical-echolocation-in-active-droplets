@@ -37,7 +37,7 @@ exit_radius = 20.0  # radius of the exit aroudn the target (static source)
 exit_wall_radius = 20.0  # radius for the leaky exit wall
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 drops_added_incremental = True
-test_run = False
+test_run = True
 
 # Simulation parameters
 dx = 1.0  # grid spacing
@@ -54,7 +54,7 @@ time = time[np.newaxis, :]
 total_time = dt * time_loop * n_steps  # total time of the simulation
 write_every = 100  # write output after every this many time steps
 if test_run:
-    n_steps = 300
+    n_steps = 600
     time_loop = 100
 
 # Data directory
@@ -86,7 +86,7 @@ X, Y = np.indices(maze.shape)
 cx, cy = np.rint(np.array(static_source_position) / dx)
 exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
 death_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius * 0.9 / dx) ** 2
-
+grim_reaper_delay = 0.0
 
 # Initial condition everywhere inside the grid
 c_initial = 0.0
@@ -195,6 +195,7 @@ parameter_dict = {
     "dead_tracker": dead_tracker,
     "death_zone_map": death_zone_map,
     "exit_zone_map": exit_zone_map,
+    "grim_reaper_delay": grim_reaper_delay,
     "emitter_position": tuple(emitter_position),
     "param_filename": param_filename,
     "grid_filename": grid_filename,
@@ -209,7 +210,7 @@ parameter_dict = {
 full_traj = np.empty((num_particles, 0, 15), dtype=np.float32)
 exit_times = np.zeros(num_particles)
 for i in range(time_loop):
-    conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep = (
+    conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep, exit_trigger_time = (
         chemical_solver(
             conc,
             p,

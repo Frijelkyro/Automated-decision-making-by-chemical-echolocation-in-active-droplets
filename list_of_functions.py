@@ -454,6 +454,8 @@ def chemical_solver(
     dead_tracker = kwargs.get("dead_tracker", np.zeros(num_particles, dtype=bool))
     death_zone_map = kwargs.get("death_zone_map", np.zeros_like(maze, dtype=bool))
     exit_zone_map = kwargs.get("exit_zone_map", np.zeros_like(maze, dtype=bool))
+    grim_reaper_delay = kwargs.get("grim_reaper_delay", 0)
+    exit_trigger_time = kwargs.get("exit_trigger_time", np.full(num_particles, np.inf))
     emitter_position = np.array(
         kwargs.get("emitter_position", (0.0, 0.0)), dtype=np.float32
     )
@@ -520,9 +522,11 @@ def chemical_solver(
 
         if drops_added_incremental:
             new_births = birth_steps == timestep
-            min_clearance = 1.5 * dx 
+            min_clearance = 1.5 * dx
 
-            spawning_indices = np.where(new_births)[0]  # indices of particles trying to spawn right now
+            spawning_indices = np.where(new_births)[
+                0
+            ]  # indices of particles trying to spawn right now
             if len(spawning_indices) > 0:
                 is_clear = True
 
@@ -531,14 +535,18 @@ def chemical_solver(
                     active_positions = position[active_mask, t, :]
 
                     # Vectorized distance calculation to the single emitter point
-                    dist_to_emitter = np.linalg.norm(active_positions - emitter_position, axis=1)
+                    dist_to_emitter = np.linalg.norm(
+                        active_positions - emitter_position, axis=1
+                    )
 
                     if np.min(dist_to_emitter) < min_clearance:
                         is_clear = False
 
                 if is_clear:
                     first_particle_idx = spawning_indices[0]
-                    active_mask[first_particle_idx] = True  # Spawn the first particle in the queue
+                    active_mask[first_particle_idx] = (
+                        True  # Spawn the first particle in the queue
+                    )
 
                     # Delay the rest (if any) because they can't occupy the exact same spot
                     if len(spawning_indices) > 1:
@@ -735,7 +743,7 @@ def chemical_solver(
             ang_velocity[active_mask, t + 1] = (
                 theta[active_mask, t + 1] - theta[active_mask, t]
             ) / dt
-        
+
         if np.any(active_mask):
             px_bins[active_mask] = np.rint(position[active_mask, t, 0] / dx).astype(int)
             py_bins[active_mask] = np.rint(position[active_mask, t, 1] / dx).astype(int)
@@ -766,15 +774,26 @@ def chemical_solver(
                 n_steps,
             )
 
-        # exit condition (simplified)
+        # exit condition
 
-        hit_exit_zone = active_mask & death_zone_map[px_bins, py_bins]
+        hit_exit_zone = (
+            active_mask & death_zone_map[px_bins, py_bins] & np.isinf(exit_trigger_time)
+        )
 
         if np.any(hit_exit_zone):
-            dead_tracker[hit_exit_zone] = True
-            position[hit_exit_zone, t:, :] = np.nan
-            velocity[hit_exit_zone, t:, :] = np.nan
-            exit_times[hit_exit_zone] = timestep
+            exit_trigger_time[hit_exit_zone] = timestep
+
+        ready_to_reap = (
+            ~dead_tracker
+            & np.isfinite(exit_trigger_time)
+            & ((timestep - exit_trigger_time) >= grim_reaper_delay)
+        )
+
+        if np.any(ready_to_reap):
+            dead_tracker[ready_to_reap] = True
+            position[ready_to_reap, t:, :] = np.nan
+            velocity[ready_to_reap, t:, :] = np.nan
+            exit_times[ready_to_reap] = exit_trigger_time[ready_to_reap]  # use timestep to find time of removal alternatively
 
         active_mask[dead_tracker] = False
 
@@ -816,4 +835,5 @@ def chemical_solver(
         f_wall,
         exit,
         exit_timestep,
+        exit_trigger_time,
     )
