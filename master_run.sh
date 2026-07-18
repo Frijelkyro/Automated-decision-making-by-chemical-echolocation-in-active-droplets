@@ -214,6 +214,7 @@ mkdir --parents ./output/videos
 ## for REAPER_TIMER in 64.0 32.0 16.0 8.0 4.0 2.0 1.0 0.5 0.25 0.1 0.05 0 ; do
 for REAPER_TIMER in 32.0 0.1 2.0 16.0 0.5 32.1 0.11 2.1 16.1 0.51; do
     echo "=== Running simulation for REAPER_TIMER = $REAPER_TIMER ==="
+<<<<<<< HEAD
     d = "./output/reaper_timer/${REAPER_TIMER}_until_death"
     mkdir --parents $d
     #sed -i -E "s/^drops_added_incremental =.*/drops_added_incremental = False/" maze_cluster_script.py
@@ -226,6 +227,19 @@ for REAPER_TIMER in 32.0 0.1 2.0 16.0 0.5 32.1 0.11 2.1 16.1 0.51; do
     fi
     if [ exit_code -ne 0 ]; then
         log_and_exit_times_recovery "${d}/crash_logs/${padded}/data"
+=======
+    rm -f ./data/conc*.txt ./data/part*.txt
+    d="./output/reaper_timer/${REAPER_TIMER}_until_death"
+    mkdir --parents "${d}/data/"
+    sed -i -E "s/^[[:space:]]*grim_reaper_delay[[:space:]]*=.*/grim_reaper_delay = $REAPER_TIMER/" maze_cluster_script.py
+    python maze_cluster_script.py
+    exit_code=$?
+    python video_maker.py
+    cp -r ./data/* "${d}/${REAPER_TIMER}rip_data/"
+    mv "${d}/${REAPER_TIMER}rip_data/particle_trajectory" "${d}/${REAPER_TIMER}rip_data/particle_trajectory"
+    if [ $exit_code -ne 0 ]; then
+        log_and_exit_times_recovery "${d}/crash_logs/data"
+>>>>>>> 58c8a0f (added delay before particles are removed)
     fi
 done
 
