@@ -37,7 +37,7 @@ exit_radius = 20.0  # radius of the exit aroudn the target (static source)
 exit_wall_radius = 20.0  # radius for the leaky exit wall
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 drops_added_incremental = True
-test_run = True
+test_run = False
 
 # Simulation parameters
 dx = 1.0  # grid spacing
@@ -45,8 +45,8 @@ Lx = 100.0  # domain size
 Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
-n_steps = 16000  # number of time steps 40000
-dt = 0.12 * 10 ** (-3)  # time step size
+n_steps = 5000  # number of time steps 40000
+dt = 0.25 * 10 ** (-3)  # time step size
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
 time_loop = 100  # number of time loops
 time = np.arange(0, time_loop * n_steps, 1) * dt
@@ -86,17 +86,18 @@ X, Y = np.indices(maze.shape)
 cx, cy = np.rint(np.array(static_source_position) / dx)
 exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
 death_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius * 0.9 / dx) ** 2
-grim_reaper_delay = 0.0
+grim_reaper_delay = 12.0
 
 # Initial condition everywhere inside the grid
 c_initial = 0.0
 
-num_particles = 200 # Number of particles
-emission_rate = 2 # droplets per second
+num_particles = 100 # Number of particles
+emission_rate = 1 # droplets per second
 
 exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
 active_mask = np.zeros(num_particles, dtype=bool)
 dead_tracker = np.zeros(num_particles, dtype=bool)
+exit_trigger_time = np.full(num_particles, np.inf)
 
 # Calculate arrays safely using the master num_particles variable
 p = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
@@ -196,6 +197,7 @@ parameter_dict = {
     "death_zone_map": death_zone_map,
     "exit_zone_map": exit_zone_map,
     "grim_reaper_delay": grim_reaper_delay,
+    "exit_trigger_time": exit_trigger_time,
     "emitter_position": tuple(emitter_position),
     "param_filename": param_filename,
     "grid_filename": grid_filename,

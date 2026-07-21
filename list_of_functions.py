@@ -462,6 +462,7 @@ def chemical_solver(
     permeability = kwargs.get("permeability", 0.0)
     drops_added_incremental = kwargs.get("drops_added_incremental", True)
     exit_wall_mask = kwargs.get("exit_wall_mask", None)
+    grim_reaper_delay_timestep = grim_reaper_delay / dt
 
     nt, nx, ny = c.shape
     wall = maze == 0
@@ -782,11 +783,12 @@ def chemical_solver(
 
         if np.any(hit_exit_zone):
             exit_trigger_time[hit_exit_zone] = timestep
+            print("particle(s) reached the exit zone at timestep: " + str(start_step + timestep) + " ;Simulation Time: "+ str((start_step + timestep)*dt))
 
         ready_to_reap = (
             ~dead_tracker
             & np.isfinite(exit_trigger_time)
-            & ((timestep - exit_trigger_time) >= grim_reaper_delay)
+            & ((timestep - exit_trigger_time) >= grim_reaper_delay_timestep)
         )
 
         if np.any(ready_to_reap):
