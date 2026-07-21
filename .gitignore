@@ -1,7 +1,10 @@
 archive/*
 data/*
+data
 output/*
+output
 particle_trajectory.mp4
+.python-version
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
