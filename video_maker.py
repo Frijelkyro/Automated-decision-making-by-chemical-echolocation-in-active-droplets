@@ -80,7 +80,7 @@ def get_dt_from_params(filename):
     return None
 
 
-t_unit = 60 / 60  # min
+t_unit = 60 / 60  # min TODO: why is this factor = 1?
 r_unit = 1e-04  # cm
 dt = get_dt_from_params(data + "param.txt")
 times = np.array(timestamps) * dt * t_unit
