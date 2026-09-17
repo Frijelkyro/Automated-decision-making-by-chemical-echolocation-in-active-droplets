@@ -55,6 +55,7 @@ data = "./data/"
 
 # Load the maze
 maze = maze_from_file("./different_mazes/Ran_maze_size_prop_to_droplet.tsv")
+maze = maze_from_file("./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv")
 # maze = maze_from_file('./different_mazes/empty_box.tsv')
 wall = np.transpose(np.where(maze == 0))
 
@@ -121,6 +122,7 @@ ax.plot(wall[:, 0], wall[:, 1], "s", markersize=6, color="#B8C7E5")
 
 # Annotations
 source = np.array([90.2, 10.5])
+source = np.array([42.5, 10.5])
 ax.text(
     source[0] - 4,
     source[1] - 2,

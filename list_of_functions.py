@@ -524,7 +524,7 @@ def chemical_solver(
 
         if drops_added_incremental:
             min_clearance = 1.5 * dx
-            spawning_queue = np.where((birth_steps <= timestep) & (~active_mask))[0]
+            spawning_queue = np.where((birth_steps <= timestep) & (~active_mask) & (~dead_tracker))[0]
 
             if len(spawning_queue) > 0:
                 is_clear = True
@@ -769,7 +769,7 @@ def chemical_solver(
 
         if np.any(hit_exit_zone):
             exit_trigger_time[hit_exit_zone] = timestep
-            print("particle(s) reached the exit zone at timestep: " + str(start_step + timestep) + " ;Simulation Time: "+ str((start_step + timestep)*dt))
+            # print("particle(s) reached the exit zone at timestep: " + str(start_step + timestep) + " ;Simulation Time: "+ str((start_step + timestep)*dt))
 
         ready_to_reap = (
             ~dead_tracker

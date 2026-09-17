@@ -8,9 +8,15 @@ import numpy as np
 from maze_functions import *
 from list_of_functions import *
 
+from time import perf_counter
+from tqdm import tqdm
+
+
 # This script is used to run the chemical solver on a maze with one particle.
 # It initializes the parameters, generates a maze, and runs the simulation.
 
+
+init_t0 = perf_counter()  # time tracking
 beta = -8
 
 Dc = 2.0 * 10 ** (2)  # diffusion coefficient of the chemical (100)
@@ -37,7 +43,7 @@ exit_radius = 20.0  # radius of the exit aroudn the target (static source)
 exit_wall_radius = 20.0  # radius for the leaky exit wall
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 drops_added_incremental = True
-test_run = False
+test_run = True
 
 # Simulation parameters
 dx = 1.0  # grid spacing
@@ -53,9 +59,17 @@ time = np.arange(0, time_loop * n_steps, 1) * dt
 time = time[np.newaxis, :]
 total_time = dt * time_loop * n_steps  # total time of the simulation
 write_every = 100  # write output after every this many time steps
+
+num_particles = 400 # Number of particles
+emission_rate = 4.0 # droplets per second
+emitter_position = np.array([4.1, 82.1], dtype=np.float32)
 if test_run:
-    n_steps = 600
-    time_loop = 100
+    # num_particles = int(num_particles * 0.1 // 1)
+    n_steps = int(n_steps * 0.1 // 1)  # preferably 600
+    #time_loop = int(time_loop * 0.1 // 1)  # preferably 10
+    write_every = 100
+    static_source_position = (42.5, 10.5)  # Position of the static source
+    emitter_position = np.array([2.1, 14.8], dtype=np.float32)
 
 # Data directory
 data = "data"  # for linux
@@ -81,18 +95,15 @@ wall = np.transpose(np.where(maze == 0))
 death_zone_map = np.zeros_like(maze, dtype=bool)
 # exit at [90.2, 10.5]
 # death_zone_map[94:98, 0:35] = True
-# death_zone_map[50:98, 0:4] = True
+# death_zone_map[50:98, 0:4] = True 
 X, Y = np.indices(maze.shape)
 cx, cy = np.rint(np.array(static_source_position) / dx)
 exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
 death_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius * 0.9 / dx) ** 2
-grim_reaper_delay = 12.0
+grim_reaper_delay = 12.1
 
 # Initial condition everywhere inside the grid
 c_initial = 0.0
-
-num_particles = 100 # Number of particles
-emission_rate = 1 # droplets per second
 
 exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
 active_mask = np.zeros(num_particles, dtype=bool)
@@ -105,9 +116,6 @@ v = np.full((num_particles, n_steps, 2), 0.0, dtype=np.float32)
 theta = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 
-emitter_position = np.array([4.1, 82.1], dtype=np.float32)
-if test_run:
-    emitter_position = np.array([48.1, 14.8], dtype=np.float32)
 
 if drops_added_incremental:
     # All particles start at the same emitter location and activate at delayed birth times.
@@ -211,7 +219,18 @@ parameter_dict = {
 
 full_traj = np.empty((num_particles, 0, 15), dtype=np.float32)
 exit_times = np.zeros(num_particles)
-for i in range(time_loop):
+
+init_time = perf_counter() - init_t0  # time tracking
+print(f"Initialization time: {init_time:.3f} s | particles: {num_particles} | n_steps/loop: {n_steps} | maze.shape: {maze.shape}")
+
+simulation_t0 = perf_counter()  # time tracking
+n_active = active_mask.sum()
+
+pbar = tqdm(range(time_loop), desc="Simulation", unit="loop")
+
+for i in pbar:
+#for i in range(time_loop):
+    loop_t0 = perf_counter()  # time tracking
     conc, p, theta, v, omega, f_sp, f_chem, f_int, f_wall, exit, exit_timestep, exit_trigger_time = (
         chemical_solver(
             conc,
@@ -246,29 +265,38 @@ for i in range(time_loop):
         # full_traj = np.append(full_traj, current_traj, axis=1)
         conc[-1, :, :] = conc[exit_timestep % n_steps, :, :]
         break
-    current_time = np.repeat(
-        time[:, i * n_steps : (i + 1) * n_steps, np.newaxis], num_particles, axis=0
-    )
-    current_traj = np.concatenate(
-        (
-            current_time,
-            p,
-            theta[:, :, np.newaxis],
-            v,
-            omega[:, :, np.newaxis],
-            f_sp,
-            f_chem,
-            f_int,
-            f_wall,
-        ),
-        axis=-1,
-    )
+    #current_time = np.repeat(
+    #    time[:, i * n_steps : (i + 1) * n_steps, np.newaxis], num_particles, axis=0
+    #)
+    #current_traj = np.concatenate(
+    #    (
+    #        current_time,
+    #        p,
+    #        theta[:, :, np.newaxis],
+    #        v,
+    #        omega[:, :, np.newaxis],
+    #        f_sp,
+    #        f_chem,
+    #        f_int,
+    #        f_wall,
+    #    ),
+    #    axis=-1,
+    #)
     # full_traj = np.append(full_traj, current_traj, axis=1)
     conc[0, :, :] = conc[-1, :, :]
     p[:, 0, :] = p[:, -1, :]
     theta[:, 0] = theta[:, -1]
     omega[:, 0] = omega[:, -1]
     v[:, 0, :] = v[:, -1, :]
+
+    loop_time = perf_counter() - loop_t0
+    n_active = active_mask.sum()
+
+    pbar.set_postfix(
+        timestep=(i + 1) * n_steps,
+        active=n_active,
+        loop_time=f"{loop_time:.3f}s",
+    )
 
 
 # Assuming you have column names
@@ -325,3 +353,13 @@ with open(filename2, "a") as f:
         f.write(
             f"{max((exit_times[particle_id]-birth_steps[particle_id]) *dt, -1)} {beta} {job_id} {particle_id}\n"
         )
+
+simulation_time = perf_counter() - simulation_t0
+param_filename = data + "/param.txt"
+
+with open(param_filename, "a") as f:
+    f.write(f"emission_rate: {emission_rate:.3f}")
+    f.write(f"Initialization time: {init_time:.3f} s\n")
+    f.write(f"Total simulation time: {simulation_time:.3f} s\n")
+
+print(f"Total simulation time: {simulation_time:.3f} s")
