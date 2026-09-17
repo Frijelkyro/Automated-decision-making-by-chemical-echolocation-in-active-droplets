@@ -520,50 +520,36 @@ def chemical_solver(
 
     for timestep in range(start_step, start_step + nt - 1):
         t = timestep % nt
+        t_next = (timestep + 1) % nt
 
         if drops_added_incremental:
-            new_births = birth_steps == timestep
             min_clearance = 1.5 * dx
+            spawning_queue = np.where((birth_steps <= timestep) & (~active_mask))[0]
 
-            spawning_indices = np.where(new_births)[
-                0
-            ]  # indices of particles trying to spawn right now
-            if len(spawning_indices) > 0:
+            if len(spawning_queue) > 0:
                 is_clear = True
 
                 if np.any(active_mask):
-                    # Pre-extract active positions for speed
                     active_positions = position[active_mask, t, :]
-
-                    # Vectorized distance calculation to the single emitter point
                     dist_to_emitter = np.linalg.norm(
                         active_positions - emitter_position, axis=1
                     )
 
-                    if np.min(dist_to_emitter) < min_clearance:
+                    if dist_to_emitter.size > 0 and np.min(dist_to_emitter) < min_clearance:
                         is_clear = False
 
                 if is_clear:
-                    first_particle_idx = spawning_indices[0]
-                    active_mask[first_particle_idx] = (
-                        True  # Spawn the first particle in the queue
-                    )
-
-                    # Delay the rest (if any) because they can't occupy the exact same spot
-                    if len(spawning_indices) > 1:
-                        birth_steps[spawning_indices[1:]] += 1
-                else:
-                    # The emitter is blocked; delay EVERYONE in the queue
-                    birth_steps[spawning_indices] += 1
+                    first_particle_idx = spawning_queue[0]
+                    active_mask[first_particle_idx] = True
         else:
             if timestep == 0:
                 active_mask[:] = True
 
         inactive_mask = ~active_mask
-        position[inactive_mask, t + 1, :] = position[inactive_mask, t, :]
-        velocity[inactive_mask, t + 1, :] = 0.0
-        theta[inactive_mask, t + 1] = theta[inactive_mask, t]
-        ang_velocity[inactive_mask, t + 1] = ang_velocity[inactive_mask, t]
+        position[inactive_mask, t_next, :] = position[inactive_mask, t, :]
+        velocity[inactive_mask, t_next, :] = 0.0
+        theta[inactive_mask, t_next] = theta[inactive_mask, t]
+        ang_velocity[inactive_mask, t_next] = ang_velocity[inactive_mask, t]
 
         A = c[t, 2:, 1:-1]  # c[k, i+1, j]
         B = c[t, :-2, 1:-1]  # c[k, i-1, j]
