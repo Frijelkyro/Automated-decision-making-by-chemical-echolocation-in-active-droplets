@@ -221,7 +221,7 @@ full_traj = np.empty((num_particles, 0, 15), dtype=np.float32)
 exit_times = np.zeros(num_particles)
 
 init_time = perf_counter() - init_t0  # time tracking
-print(f"Initialization time: {init_time:.3f} s | particles: {num_particles} | n_steps/loop: {n_steps} | maze.shape: {maze.shape}")
+print(f"Initialization time: {init_time:.3f} s | particles: {num_particles} | n_steps/loop: {n_steps} | maze.shape: {maze.shape} | concentration shape: {conc.shape} | emission_rate: {emission_rate} | dt: {dt}")
 
 simulation_t0 = perf_counter()  # time tracking
 n_active = active_mask.sum()
@@ -297,7 +297,6 @@ for i in pbar:
         active=n_active,
         loop_time=f"{loop_time:.3f}s",
     )
-
 
 # Assuming you have column names
 column_names = [
