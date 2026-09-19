@@ -155,8 +155,8 @@ if not drops_added_incremental:
                 f"Could not fit particle {particle_id}. Increase initial_spread or decrease min_separation."
             )
 
-        p[particle_id, 0] = candidate
-        placed_positions = np.vstack([placed_positions, candidate])
+        p[particle_id, 0] = candidate # type: ignore
+        placed_positions = np.vstack([placed_positions, candidate]) # type: ignore
     birth_steps = np.array([0 for i in range(num_particles)], dtype=int)
 
 # HERE Particle information could be read and continued
