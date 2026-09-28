@@ -1,3 +1,6 @@
+import os
+import re
+
 import numpy as np
 from maze_functions import get_exit_wall_mask, leaky_exit_wall
 
@@ -20,37 +23,36 @@ def initialize_c_from_file(c_initial, n_steps, maze, filename):
     return c
 
 
-def compute_birth_steps(num_particles, emission_rate, dt):
+def compute_birth_times(num_particles, emission_rate):
     emission_interval = 1.0 / emission_rate
     return np.array(
-        [int(round(i * emission_interval / dt)) for i in range(num_particles)],
+        [int(round(i * emission_interval)) for i in range(num_particles)],
         dtype=int,
     )
 
 
-def active_particle_mask(timestep, birth_steps):
-    return timestep >= birth_steps
+def active_particle_mask(simulation_time, birth_times):
+    return simulation_time >= birth_times
 
 
 # define the source function for a moving point source
 def moving_point_source(
     s,
     production_strength,
-    timestep,
+    local_step,
+    simulation_time,
     particle_positions,
     dx,
-    dt,
     moving_source_decay_rate,
     n_steps,
 ):
-    t = timestep % n_steps
+    t = local_step % n_steps
     for particle_id in range(particle_positions.shape[0]):
         x_bin = int(np.rint(particle_positions[particle_id, 0] / dx))
         y_bin = int(np.rint(particle_positions[particle_id, 1] / dx))
         s[t, x_bin, y_bin] += (production_strength / (dx**2)) * np.exp(
-            -timestep * dt * moving_source_decay_rate
+            -simulation_time * moving_source_decay_rate
         )
-        # s[t, x_bin, y_bin] += (production_strength / (dx ** 2))
     return s
 
 
@@ -58,20 +60,19 @@ def moving_point_source(
 def static_point_source(
     s,
     production_strength,
-    timestep,
+    local_step,
+    simulation_time,
     source_position,
     dx,
-    dt,
     static_source_decay_rate,
     n_steps,
 ):
-    t = timestep % n_steps
+    t = local_step % n_steps
     x_bin = int(np.rint(source_position[0] / dx))
     y_bin = int(np.rint(source_position[1] / dx))
     s[t, x_bin, y_bin] += (production_strength / (dx**2)) * np.exp(
-        -timestep * dt * static_source_decay_rate
+        -simulation_time * static_source_decay_rate
     )
-    # s[t, x_bin, y_bin] += (production_strength / (dx ** 2))
     return s
 
 
@@ -294,42 +295,68 @@ def wall_force(position, t, wall_coords, dx, active_mask=None):
 
 def self_propulsion_force(
     position,
-    timestep,
+    local_step,
+    simulation_time,
     theta,
-    dt,
     sp_decay_rate,
     n_steps,
     self_propulsion_speed,
     active_mask=None,
 ):
-    t = timestep % n_steps
+    t = local_step % n_steps
     num_particles = position.shape[0]
-    forces = np.zeros((num_particles, 2))
+
+    forces = np.zeros((num_particles, 2), dtype=np.float32)
+
     if active_mask is None:
         active_mask = np.ones(num_particles, dtype=bool)
 
-    for i in np.where(active_mask)[0]:
-        forces[i, 0] = (
-            self_propulsion_speed
-            * np.cos(theta[i, t])
-            * np.exp(-timestep * dt * sp_decay_rate)
-        )
-        forces[i, 1] = (
-            self_propulsion_speed
-            * np.sin(theta[i, t])
-            * np.exp(-timestep * dt * sp_decay_rate)
-        )
-        # forces[i, 1] = self_propulsion_speed * np.sin(theta[i, t])
+    decay = np.exp(-simulation_time * sp_decay_rate)
+
+    active_indices = np.where(active_mask)[0]
+
+    forces[active_indices, 0] = (
+        self_propulsion_speed
+        * np.cos(theta[active_indices, t])
+        * decay
+    )
+    forces[active_indices, 1] = (
+        self_propulsion_speed
+        * np.sin(theta[active_indices, t])
+        * decay
+    )
 
     return forces
 
-
 def write_parameters(**parameters):
     param_filename = parameters.get("param_filename", "parameters.txt")
-    with open(param_filename, "w") as param_file:
+
+    directory = os.path.dirname(param_filename)
+    basename = os.path.basename(param_filename)
+
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+    # Find existing paramXX.txt files
+    existing = []
+
+    for filename in os.listdir(directory or "."):
+        match = re.fullmatch(r"param(\d+)\.txt", filename)
+        if match:
+            existing.append(int(match.group(1)))
+
+    # First file is param00.txt
+    next_number = max(existing, default=-1) + 1
+    numbered_filename = os.path.join(
+        directory or ".",
+        f"param{next_number:02d}.txt",
+    )
+
+    with open(numbered_filename, "w") as param_file:
         for key, value in parameters.items():
-            # param_file.write(f"{key}: {value:.2e}\n")
             param_file.write(f"{key}: {value}\n")
+
+    return numbered_filename
 
 
 def write_grid(grid_filename, nx, ny):
@@ -388,23 +415,17 @@ def write_particles(
                     f"{forces_wall[particle_id, 0]} {forces_wall[particle_id, 1]}\n"
                 )
 
-
-def exit_condition(timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker):
-    # A particle exits if it lands on a True cell in the exit map,
-    # hasn't exited yet
-    new_exits = exit_zone_map[px_bins, py_bins] & (exit_times == 0.0)
-
-    if np.any(new_exits):
-        print(f"{np.sum(new_exits)} particle(s) reached the exit region!")
-        exit_times[new_exits] = timestep
-
-    # Check if all particles have successfully exited or died
-    has_exited_or_died = (exit_times > 0.0) | dead_tracker
-    return np.all(has_exited_or_died)
-
-
 def chemical_solver(
-    c, position, theta, velocity, ang_velocity, maze, exit_times, start_step=0, **kwargs
+    c,
+    position,
+    theta,
+    velocity,
+    ang_velocity,
+    maze,
+    exit_times,
+    start_step=0,
+    start_time=0.0,
+    **kwargs,
 ):
 
     # unpacking the kwargs
@@ -434,7 +455,6 @@ def chemical_solver(
     n_steps = kwargs.get("n_steps", 1)
     dt = kwargs.get("dt", 1)
     gamma = kwargs.get("gamma", 1)
-    total_time = kwargs.get("total_time", 1)
     time_loop = kwargs.get("time_loop", 1)
     write_every = kwargs.get("write_every", 1)
     num_particles = kwargs.get("num_particles", 1)
@@ -449,7 +469,7 @@ def chemical_solver(
     epsilon_LJ = kwargs.get("epsilon_LJ", 1)
     static_source_position = kwargs.get("static_source_position", (1, 1))
     exit_radius = kwargs.get("exit_radius", 20)
-    birth_steps = kwargs.get("birth_steps", np.zeros(num_particles, dtype=int))
+    birth_times = kwargs.get("birth_times", np.zeros(num_particles, dtype=int))
     active_mask = kwargs.get("active_mask", np.zeros(num_particles, dtype=bool))
     dead_tracker = kwargs.get("dead_tracker", np.zeros(num_particles, dtype=bool))
     death_zone_map = kwargs.get("death_zone_map", np.zeros_like(maze, dtype=bool))
@@ -462,7 +482,8 @@ def chemical_solver(
     permeability = kwargs.get("permeability", 0.0)
     drops_added_incremental = kwargs.get("drops_added_incremental", True)
     exit_wall_mask = kwargs.get("exit_wall_mask", None)
-    grim_reaper_delay_timestep = grim_reaper_delay / dt
+    # grim_reaper_delay_timestep = grim_reaper_delay / dt
+    grim_reaper_delay_time = grim_reaper_delay
 
     nt, nx, ny = c.shape
     wall = maze == 0
@@ -518,13 +539,21 @@ def chemical_solver(
     px_bins = np.zeros(num_particles, dtype=int)
     py_bins = np.zeros(num_particles, dtype=int)
 
-    for timestep in range(start_step, start_step + nt - 1):
-        t = timestep % nt
-        t_next = (timestep + 1) % nt
+    for local_step in range(nt - 1):
 
+        timestep = start_step + local_step
+        simulation_time = start_time + local_step * dt
+
+        t = local_step
+        t_next = local_step + 1
+        
         if drops_added_incremental:
             min_clearance = 1.5 * dx
-            spawning_queue = np.where((birth_steps <= timestep) & (~active_mask) & (~dead_tracker))[0]
+            spawning_queue = np.where(
+                (birth_times <= simulation_time)
+                & (~active_mask)
+                & (~dead_tracker)
+            )[0]
 
             if len(spawning_queue) > 0:
                 is_clear = True
@@ -535,15 +564,15 @@ def chemical_solver(
                         active_positions - emitter_position, axis=1
                     )
 
-                    if dist_to_emitter.size > 0 and np.min(dist_to_emitter) < min_clearance:
+                    if (
+                        dist_to_emitter.size > 0
+                        and np.min(dist_to_emitter) < min_clearance
+                    ):
                         is_clear = False
 
                 if is_clear:
                     first_particle_idx = spawning_queue[0]
                     active_mask[first_particle_idx] = True
-        else:
-            if timestep == 0:
-                active_mask[:] = True
 
         inactive_mask = ~active_mask
         position[inactive_mask, t_next, :] = position[inactive_mask, t, :]
@@ -561,20 +590,20 @@ def chemical_solver(
         source = moving_point_source(
             source,
             moving_source_production_strength,
-            timestep,
+            local_step,
+            simulation_time,
             particle_positions[active_mask],
             dx,
-            dt,
             moving_source_decay_rate,
             n_steps,
         )
         source = static_point_source(
             source,
             static_source_production_strength,
-            timestep,
+            local_step,
+            simulation_time,
             static_source_position,
             dx,
-            dt,
             static_source_decay_rate,
             n_steps,
         )
@@ -637,9 +666,9 @@ def chemical_solver(
         forces_wall = wall_force(position, t, wall_coords, dx, active_mask=active_mask)
         forces_self_propulsion = self_propulsion_force(
             position,
-            timestep,
+            local_step,
+            simulation_time,
             theta,
-            dt,
             sp_decay_rate,
             n_steps,
             self_propulsion_speed,
@@ -732,19 +761,90 @@ def chemical_solver(
             ) / dt
 
         if np.any(active_mask):
-            px_bins[active_mask] = np.rint(position[active_mask, t, 0] / dx).astype(int)
-            py_bins[active_mask] = np.rint(position[active_mask, t, 1] / dx).astype(int)
+            px_bins[active_mask] = np.rint(position[active_mask, t + 1, 0] / dx).astype(int)
+            py_bins[active_mask] = np.rint(position[active_mask, t + 1, 1] / dx).astype(int)
 
-            # Clip indices safely within maze boundaries
-            px_bins[active_mask] = np.clip(px_bins[active_mask], 0, maze.shape[0] - 1)
-            py_bins[active_mask] = np.clip(py_bins[active_mask], 0, maze.shape[1] - 1)
+            # # Clip indices safely within maze boundaries
+            # px_bins[active_mask] = np.clip(px_bins[active_mask], 0, maze.shape[0] - 1)
+            # py_bins[active_mask] = np.clip(py_bins[active_mask], 0, maze.shape[1] - 1)
 
-        # Write concentration and particle data at specified intervals
-        if timestep == 0:
+        
+        ## out_of_bounds_check()
+
+        # ---------------------------------------------------------
+        # Safety check: particles must stay away from grid boundaries
+        # ---------------------------------------------------------
+        # Requires at least one-cell padding because force calculations
+        # access neighbouring cells.
+        particle_positions_now = position[active_mask, t + 1, :]
+
+        if particle_positions_now.size > 0:
+            particle_bins_x = np.rint(
+                particle_positions_now[:, 0] / dx
+            ).astype(int)
+            particle_bins_y = np.rint(
+                particle_positions_now[:, 1] / dx
+            ).astype(int)
+
+            unsafe = (
+                (particle_bins_x < 1)
+                | (particle_bins_x >= maze.shape[0] - 1)
+                | (particle_bins_y < 1)
+                | (particle_bins_y >= maze.shape[1] - 1)
+            )
+
+            if np.any(unsafe):
+                bad_particles = np.where(active_mask)[0][unsafe]
+
+                print(
+                    f"Particle out of safe grid bounds at timestep {timestep}. "
+                    f"Particles: {bad_particles.tolist()}"
+                )
+
+                # Save the current state/output before terminating
+                write_concentration(
+                    file_prefix_conc,
+                    c,
+                    [timestep],
+                    n_steps,
+                )
+
+                write_particles(
+                    file_prefix_part,
+                    position,
+                    theta,
+                    velocity,
+                    ang_velocity,
+                    forces_self_propulsion,
+                    forces_chemotaxis,
+                    forces_interaction,
+                    forces_wall,
+                    [timestep],
+                    num_particles,
+                    n_steps,
+                )
+
+                # Mark currently active particles as exited/dead
+                exit_times[bad_particles] = simulation_time
+                dead_tracker[bad_particles] = True
+                active_mask[bad_particles] = False
+
+                exit = True
+                exit_timestep = timestep
+
+                # Save parameters so this run can be resumed/inspected
+                write_parameters(**kwargs)
+
+                break
+            ## ----------------------------------------------------------------------------
+
+
+        # Write concentration and particle data
+        if local_step == 0 and start_step == 0:
             write_parameters(**kwargs)
             write_grid(grid_filename, nx, ny)
 
-        if timestep % write_every == 0:
+        if local_step % write_every == 0:
             write_concentration(file_prefix_conc, c, [timestep], n_steps)
             write_particles(
                 file_prefix_part,
@@ -768,29 +868,26 @@ def chemical_solver(
         )
 
         if np.any(hit_exit_zone):
-            exit_trigger_time[hit_exit_zone] = timestep
-            # print("particle(s) reached the exit zone at timestep: " + str(start_step + timestep) + " ;Simulation Time: "+ str((start_step + timestep)*dt))
+            exit_trigger_time[hit_exit_zone] = simulation_time
 
         ready_to_reap = (
             ~dead_tracker
             & np.isfinite(exit_trigger_time)
-            & ((timestep - exit_trigger_time) >= grim_reaper_delay_timestep)
+            & ((simulation_time - exit_trigger_time) >= grim_reaper_delay_time)
         )
 
         if np.any(ready_to_reap):
             dead_tracker[ready_to_reap] = True
             position[ready_to_reap, t:, :] = np.nan
             velocity[ready_to_reap, t:, :] = np.nan
-            exit_times[ready_to_reap] = exit_trigger_time[ready_to_reap]  # use timestep to find time of removal alternatively
+            exit_times[ready_to_reap] = exit_trigger_time[
+                ready_to_reap
+            ]  # use timestep to find time of removal alternatively
 
         active_mask[dead_tracker] = False
 
         # Check if all particles have successfully exited or died
-        has_exited_or_died = (exit_times > 0.0) | dead_tracker
-
-        # if exit_condition(
-        #     timestep, exit_times, px_bins, py_bins, exit_zone_map, dead_tracker
-        # ):
+        has_exited_or_died = np.isfinite(exit_times) | dead_tracker
         if np.all(has_exited_or_died):
             write_concentration(file_prefix_conc, c, [timestep], n_steps)
             write_particles(
