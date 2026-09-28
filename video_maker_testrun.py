@@ -55,7 +55,7 @@ data = "./data/"
 
 # Load the maze
 maze = maze_from_file("./different_mazes/Ran_maze_size_prop_to_droplet.tsv")
-# maze = maze_from_file("./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv")  # for Testrun
+maze = maze_from_file("./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv")
 # maze = maze_from_file('./different_mazes/empty_box.tsv')
 wall = np.transpose(np.where(maze == 0))
 
@@ -122,7 +122,7 @@ ax.plot(wall[:, 0], wall[:, 1], "s", markersize=6, color="#B8C7E5")
 
 # Annotations
 source = np.array([90.2, 10.5])
-# source = np.array([42.5, 10.5])  # for Testrun
+source = np.array([42.5, 10.5])
 ax.text(
     source[0] - 4,
     source[1] - 2,
@@ -163,10 +163,10 @@ circle_red = plt.Circle((source[0], source[1]), radius=18, color='red', fill=Fal
 ax.add_patch(circle_red)
 
 # Lock the viewing window to the exact dimensions of the maze.
-ax.set_xlim(0, 99)  # comment this if Testrun
+#ax.set_xlim(0, 99)
 
 # where the Y-axis starts at 0 at the top and goes down, invert this to (110, 0).
-ax.set_ylim(0, 110)  # comment this if Testrun
+#ax.set_ylim(0, 110)
 
 # Rectangluar exit zones
 # zones = [(0, 35, 94, 98), (0, 4, 50, 98)]
@@ -197,18 +197,18 @@ ax.set_ylim(0, 110)  # comment this if Testrun
 ax.set_aspect("equal")
 
 
-start = np.array([5, 86])
-ax.text(
-    start[0],
-    start[1],
-    "Start",
-    color="k",
-    fontsize=15,
-    ha="right",
-    va="bottom",
-    backgroundcolor="white",
-    rotation="vertical",
-)
+# start = np.array([5, 86])
+# ax.text(
+#     start[0],
+#     start[1],
+#     "Start",
+#     color="k",
+#     fontsize=15,
+#     ha="right",
+#     va="bottom",
+#     backgroundcolor="white",
+#     rotation="vertical",
+# )
 
 # Trajectory lines and current points for each particle
 colors = [
