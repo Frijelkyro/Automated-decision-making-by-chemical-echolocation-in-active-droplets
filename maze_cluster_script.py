@@ -47,31 +47,25 @@ Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
 n_steps = 5000  # number of time steps 40000
-dt = 0.51 * 10 ** (-3)  # time step size
+time_loop = 1000  # number of time loops
+dt = 0.001 * 10 ** (-3)  # time step size
+desired_time = None
+if desired_time:
+    time_loop = int(np.ceil(desired_time / n_steps / dt))
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
-time_loop = 100  # number of time loops
 
-# global_step = 0      # integer, mainly for output filenames
 # local_step = 0       # integer, position within the current solver call
-# buffer_index = 0     # index into p/v/theta/c rolling arrays
-simulation_time = (
-    0.0  # physical time in seconds (will be overweritten if resume_simulation)
-)
-
-# start_time = 0.0
+simulation_time = 0.0  # physical time to start with TODO in seconds?
 # start_step = 0
-
-time = np.arange(0, time_loop * n_steps, 1) * dt
-time = time[np.newaxis, :]
 
 write_every = 100  # write output after every this many time steps
 
 num_particles = 350  # Number of particles
-emission_rate = 3  # droplets per second
+emission_rate = 9  # droplets per second
 emitter_position = np.array([4.1, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
-test_run = True
+test_run = False
 
 # Data directory
 data = "data"  # for linux
@@ -187,7 +181,7 @@ if not drops_added_incremental:
 
 # Resume settings
 resume_simulation = True
-resume_simulation = False
+# resume_simulation = False
 
 resume_step = 0  # this will be read from the last sim
 resume_old_dt = np.inf  # 0.0001 this will be read from the last sim
@@ -208,12 +202,14 @@ if resume_simulation:
         resume_step,
         simulation_time,
         resume_old_dt,
-    ) = resume_simulation_from_file(data, param_filename+".bak", maze, n_steps)
+    ) = resume_simulation_from_file(data, param_filename + ".bak", maze, n_steps)
 
     print(
         f"Resuming from timestep {resume_step} "
-        f"(t = {simulation_time:.6f} s, old dt = {resume_old_dt})"
+        f"(t: {simulation_time:.6f} s, old dt: {resume_old_dt}, new dt: {dt})"
     )
+    if desired_time:
+        time_loop = int(np.ceil((desired_time - simulation_time) / n_steps / dt))
 
 
 # build a parameter dictionary
@@ -304,7 +300,8 @@ for i in pbar:
         **parameter_dict,
     )
 
-    if not exit: write_param_snapshot(parameter_dict, simulation_time, resume_step + i * n_steps)
+    if not exit:
+        write_param_snapshot(parameter_dict, simulation_time, resume_step + i * n_steps)
 
     simulation_time += (n_steps - 1) * dt
 
