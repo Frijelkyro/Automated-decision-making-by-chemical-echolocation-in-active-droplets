@@ -46,10 +46,10 @@ Lx = 100.0  # domain size
 Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
-n_steps = 5000  # number of time steps 40000
-time_loop = 1000  # number of time loops
-dt = 0.001 * 10 ** (-3)  # time step size
-desired_time = None
+n_steps = 100  # number of time steps 40000
+time_loop = 2250  # number of time loops
+dt = 0.25 * 10 ** (-3)  # time step size
+desired_time = 250
 if desired_time:
     time_loop = int(np.ceil(desired_time / n_steps / dt))
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
@@ -60,9 +60,9 @@ simulation_time = 0.0  # physical time to start with TODO in seconds?
 
 write_every = 100  # write output after every this many time steps
 
-num_particles = 350  # Number of particles
-emission_rate = 9  # droplets per second
-emitter_position = np.array([4.1, 82.1], dtype=np.float32)
+num_particles = int(np.ceil(400*3.5))  # Number of particles
+emission_rate = 3.5  # droplets per second
+emitter_position = np.array([2.8, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
 test_run = False
@@ -90,7 +90,7 @@ if test_run:
 wall = np.transpose(np.where(maze == 0))
 
 exit_radius = 20.0  # radius of the exit around the target (static source)
-grim_reaper_delay = 12.1
+grim_reaper_delay = 6.1
 exit_wall_radius = 20.0  # radius for the leaky exit wall (this also removes particles when they get <2 pixels close)
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 
@@ -110,6 +110,12 @@ cx, cy = np.rint(
 )  # static source position hold exit position
 exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
 death_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius * 0.9 / dx) ** 2
+
+birth_cx, birth_cy = np.rint(emitter_position / dx).astype(int)
+min_clearance = 1.5 * dx
+birth_zone_map = ((X - birth_cx) ** 2 + (Y - birth_cy) ** 2) <= (
+    min_clearance / dx
+) ** 2
 # open walls (if leaky)
 exit_wall_mask = get_exit_wall_mask(maze, static_source_position, dx, exit_wall_radius)
 
@@ -202,7 +208,12 @@ if resume_simulation:
         resume_step,
         simulation_time,
         resume_old_dt,
-    ) = resume_simulation_from_file(data, param_filename + ".bak", maze, n_steps)
+    ) = resume_simulation_from_file(
+        data,
+        param_filename,
+        maze,
+        n_steps,
+    )
 
     print(
         f"Resuming from timestep {resume_step} "
@@ -248,6 +259,7 @@ parameter_dict = {
     "dead_tracker": dead_tracker,
     "death_zone_map": death_zone_map,
     "exit_zone_map": exit_zone_map,
+    "birth_zone_map": birth_zone_map,
     "grim_reaper_delay": grim_reaper_delay,
     "exit_trigger_time": exit_trigger_time,
     "emitter_position": tuple(emitter_position),
@@ -355,7 +367,7 @@ for i in pbar:
     # time tracking
     n_active = active_mask.sum()
     pbar.set_postfix(
-        timestep=(i + 1) * n_steps,
+        timestep= resume_step +(i + 1) * n_steps,
         active=n_active,
         simulation_time=f"{simulation_time:.0f}s",
     )

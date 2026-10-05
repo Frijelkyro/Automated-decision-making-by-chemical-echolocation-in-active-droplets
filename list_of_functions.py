@@ -358,16 +358,30 @@ def write_parameters(**parameters):
 
 def write_param_snapshot(parameters, simulation_time, resume_step):
     param_filename = parameters.get("param_filename", "parameters.txt")
-    (
+    state_filename = param_filename.removesuffix(".txt") + "_state.npz"
+
+    if os.path.exists(param_filename):
         shutil.copy2(param_filename, param_filename + ".bak")
-        if os.path.exists(param_filename)
-        else None
+    if os.path.exists(state_filename):
+        shutil.copy2(state_filename, state_filename + ".bak")
+
+    np.savez_compressed(
+        state_filename,
+        birth_times=parameters["birth_times"],
+        active_mask=parameters["active_mask"],
+        dead_tracker=parameters["dead_tracker"],
+        exit_trigger_time=parameters["exit_trigger_time"],
+        resume_step=resume_step,
+        simulation_time=simulation_time,
     )
+
     with open(param_filename, "w") as f:
         for key, value in parameters.items():
-            f.write(f"{key}: {value}\n")
-        f.write(f"simulation_time:{simulation_time}\n")
-        f.write(f"resume_step:{resume_step}\n")
+            if key not in {"birth_times", "active_mask", "dead_tracker", "exit_trigger_time"}:
+                f.write(f"{key}: {value}\n")
+        f.write(f"state_filename: {state_filename}\n")
+        f.write(f"simulation_time: {simulation_time}\n")
+        f.write(f"resume_step: {resume_step}\n")
 
 
 def get_param_filename(data):
@@ -417,10 +431,12 @@ def write_grid(grid_filename, nx, ny):
 
 
 def write_concentration(file_prefix, c, timestep, simulation_time, n_steps):
-    filename = f"{file_prefix}_{timestep}.txt"
-    with open(filename, "w") as f:
-        f.write(f"TIMESTEP:\n{timestep}\nTIME:\n{simulation_time}\nDATA:\n")
-        np.savetxt(f, c[timestep % n_steps].ravel(), fmt="%.16f")
+    np.savez(
+        f"{file_prefix}_{timestep}.npz",
+        timestep=timestep,
+        simulation_time=simulation_time,
+        concentration=c[timestep % n_steps],
+    )
 
 
 def write_particles(
@@ -435,25 +451,29 @@ def write_particles(
     forces_wall,
     timestep,
     simulation_time,
-    num_particles,
-    n_steps,
+    save_forces=False,
 ):
-    filename = f"{file_prefix}_{timestep}.txt"
-    t = timestep % n_steps
-    with open(filename, "w") as f:
-        f.write(f"TIMESTEP:\n{timestep}\nTIME:\n{simulation_time}\n")
-        f.write(
-            "DATA: particle_id x y theta vx vy omega f_spx f_spy f_chemx f_chemy f_intx f_inty f_wallx f_wally\n"
-        )
-        for particle_id in range(num_particles):
-            f.write(
-                f"{particle_id} {particles[particle_id,t,0]} {particles[particle_id,t,1]} {theta[particle_id,t]} "
-                f"{velocity[particle_id,t,0]} {velocity[particle_id,t,1]} {ang_velocity[particle_id,t]} "
-                f"{forces_self_propulsion[particle_id,0]} {forces_self_propulsion[particle_id,1]} "
-                f"{forces_chemotaxis[particle_id,0]} {forces_chemotaxis[particle_id,1]} "
-                f"{forces_interaction[particle_id,:,0].sum()} {forces_interaction[particle_id,:,1].sum()} "
-                f"{forces_wall[particle_id,0]} {forces_wall[particle_id,1]}\n"
-            )
+    t = timestep % particles.shape[1]
+
+    data = {
+        "timestep": timestep,
+        "simulation_time": simulation_time,
+        "x": particles[:, t, 0],
+        "y": particles[:, t, 1],
+        "vx": velocity[:, t, 0],
+        "vy": velocity[:, t, 1],
+        "theta": theta[:, t],
+        "omega": ang_velocity[:, t],
+    }
+
+    if save_forces:
+        data["f_self_propulsion"] = forces_self_propulsion
+        data["f_chemotaxis"] = forces_chemotaxis
+        data["f_interaction"] = forces_interaction.sum(axis=1)
+        data["f_wall"] = forces_wall
+
+    np.savez(f"{file_prefix}_{timestep}.npz", **data)
+
 
 
 def chemical_solver(
@@ -513,6 +533,7 @@ def chemical_solver(
     active_mask = kwargs.get("active_mask", np.zeros(num_particles, dtype=bool))
     dead_tracker = kwargs.get("dead_tracker", np.zeros(num_particles, dtype=bool))
     death_zone_map = kwargs.get("death_zone_map", np.zeros_like(maze, dtype=bool))
+    birth_zone_map = kwargs.get("birth_zone_map", np.zeros_like(maze, dtype=bool))
     exit_zone_map = kwargs.get("exit_zone_map", np.zeros_like(maze, dtype=bool))
     grim_reaper_delay = kwargs.get("grim_reaper_delay", 0)
     exit_trigger_time = kwargs.get("exit_trigger_time", np.full(num_particles, np.inf))
@@ -588,29 +609,16 @@ def chemical_solver(
         t_next = local_step + 1  # goes from 1 to 49
 
         if drops_added_incremental:
-            min_clearance = 1.5 * dx
             spawning_queue = np.where(
-                (birth_times <= simulation_time) & (~active_mask) & (~dead_tracker)
+                (birth_times <= simulation_time) & ~active_mask & ~dead_tracker
             )[0]
 
-            if len(spawning_queue) > 0:
-                is_clear = True
-
-                if np.any(active_mask):
-                    active_positions = position[active_mask, t, :]
-                    dist_to_emitter = np.linalg.norm(
-                        active_positions - emitter_position, axis=1
-                    )
-
-                    if (
-                        dist_to_emitter.size > 0
-                        and np.min(dist_to_emitter) < min_clearance
-                    ):
-                        is_clear = False
-
-                if is_clear:
-                    first_particle_idx = spawning_queue[0]
-                    active_mask[first_particle_idx] = True
+            if len(spawning_queue) and not np.any(
+                birth_zone_map[px_bins[active_mask], py_bins[active_mask]]
+            ):
+                i = spawning_queue[0]
+                active_mask[i] = True
+                birth_times[i] = simulation_time
 
         inactive_mask = ~active_mask
         position[inactive_mask, t_next, :] = position[inactive_mask, t, :]
@@ -863,7 +871,6 @@ def chemical_solver(
                     timestep,
                     simulation_time,
                     num_particles,
-                    n_steps,
                 )
 
                 # Mark currently active particles as exited/dead
@@ -876,7 +883,6 @@ def chemical_solver(
 
                 # Save parameters so this run can be resumed/inspected
                 write_parameters(**kwargs)
-
 
                 break
             ## ----------------------------------------------------------------------------
@@ -901,7 +907,6 @@ def chemical_solver(
                 timestep,
                 simulation_time,
                 num_particles,
-                n_steps,
             )
 
         # exit condition
@@ -943,7 +948,6 @@ def chemical_solver(
                 timestep,
                 simulation_time,
                 num_particles,
-                n_steps,
             )
             exit = True
             exit_timestep = timestep
