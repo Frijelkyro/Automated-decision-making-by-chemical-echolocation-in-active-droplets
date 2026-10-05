@@ -422,7 +422,7 @@ def chemical_solver(
     velocity,
     ang_velocity,
     maze,
-    exit_times,
+    exit_trigger_time,
     start_step=0,
     start_time=0.0,
     **kwargs,
@@ -539,7 +539,7 @@ def chemical_solver(
     px_bins = np.zeros(num_particles, dtype=int)
     py_bins = np.zeros(num_particles, dtype=int)
 
-    for local_step in range(nt - 1):
+    for local_step in range(nt):
 
         timestep = start_step + local_step
         simulation_time = start_time + local_step * dt
@@ -825,7 +825,7 @@ def chemical_solver(
                 )
 
                 # Mark currently active particles as exited/dead
-                exit_times[bad_particles] = simulation_time
+                exit_trigger_time[bad_particles] = simulation_time
                 dead_tracker[bad_particles] = True
                 active_mask[bad_particles] = False
 
@@ -880,14 +880,11 @@ def chemical_solver(
             dead_tracker[ready_to_reap] = True
             position[ready_to_reap, t:, :] = np.nan
             velocity[ready_to_reap, t:, :] = np.nan
-            exit_times[ready_to_reap] = exit_trigger_time[
-                ready_to_reap
-            ]  # use timestep to find time of removal alternatively
 
         active_mask[dead_tracker] = False
 
         # Check if all particles have successfully exited or died
-        has_exited_or_died = np.isfinite(exit_times) | dead_tracker
+        has_exited_or_died = np.isfinite(exit_trigger_time) | dead_tracker
         if np.all(has_exited_or_died):
             write_concentration(file_prefix_conc, c, [timestep], n_steps)
             write_particles(
