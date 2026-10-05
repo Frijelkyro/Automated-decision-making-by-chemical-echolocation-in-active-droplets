@@ -135,25 +135,40 @@ mkdir --parents ./output/videos
 # for REAPER_TIMER in 48.0 24.0 12.0 6.0 3.0 1.6 0.8 0.4 0.2 0.1 0.01; do
 for REAPER_TIMER in 12.1; do  #0.4 0.2 0.1 0.01; do
     ER=3.5
-    DT=0.25
-    CALCULATED_PARTICLES=$(echo "$ER * 100" | bc | cut -d'.' -f1)
+    DT=0.9
+    CALCULATED_PARTICLES=$(echo "$ER * 400" | bc | cut -d'.' -f1)
+    DESIRED_TIME=1000
     sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $CALCULATED_PARTICLES # Number of particles/" maze_cluster_script.py
     sed -i -E "s/^emission_rate = [0-9.]+(\s*#.*)?\$/emission_rate = $ER # droplets per second/" maze_cluster_script.py
-    sed -i -E "s/^dt = .*/dt = $DT * 10 ** (-3)  # time step size/" maze_cluster_script.py   
+    sed -i -E "s/^dt = .*/dt = $DT * 10 ** (-3)  # time step size/" maze_cluster_script.py  
+    sed -i -E "s/^desired_time = */desired_time = $DESIRED_TIME/" maze_cluster_script.py  
+    sed -i -E "s/^resume_simulation = (True|False)/resume_simulation = False/" maze_cluster_script.py
+    sed -i -E "s/^test_run = (True|False)/test_run = False/" maze_cluster_script.py
+ 
 
     echo "=== Running simulation for REAPER_TIMER = $REAPER_TIMER ==="
-    rm -f ./data/conc*.txt ./data/part*.txt ./data/*.mp4
+    rm -f ./data/conc*.txt ./data/part*.txt ./data/*.mp4 ./data/param*.txt ./data/param.txt.bak
     d="./output/reaper_timer/${ER}_emission_rate/${REAPER_TIMER}_until_death"
     mkdir --parents "${d}/data/"
     sed -i -E "s/^[[:space:]]*grim_reaper_delay[[:space:]]*=.*/grim_reaper_delay = $REAPER_TIMER/" maze_cluster_script.py
     python maze_cluster_script.py
     exit_code=$?
-    python video_maker.py
-    cp -r ./data/* "${d}/data/"
-    mv "${d}/data/particle_trajectory.mp4" "${d}/${REAPER_TIMER}rip_particle_trajectory.mp4"
     if [ $exit_code -ne 0 ]; then
-        log_and_exit_times_recovery "${d}/crash_logs/data"
+        sed -i -E "s/^dt = .*/dt = $DT / 2 * 10 ** (-3)  # time step size/" maze_cluster_script.py
+        sed -i -E "s/^resume_simulation = False/resume_simulation = True/" maze_cluster_script.py
+        python maze_cluster_script.py        
+        exit_code=$?
+        if [ $exit_code -ne 0 ]; then
+            sed -i -E "s/^dt = .*/dt = $DT / 4 * 10 ** (-3)  # time step size/" maze_cluster_script.py
+            python maze_cluster_script.py
+        fi
+        sed -i -E "s/^resume_simulation = True/resume_simulation = False/" maze_cluster_script.py
     fi
+    python video_maker_testrun.py
+    cp -r ./data/* "${d}/data/"
+    cp ./data/param.txt "${d}/${REAPER_TIMER}param.txt"
+    cp ./data/param.txt.bak "${d}/${REAPER_TIMER}param.txt.bak"
+    mv "${d}/data/particle_trajectory.mp4" "${d}/${REAPER_TIMER}rip_particle_trajectory.mp4"
 done
 
 echo "All Reaper Timer simulations complete!"
