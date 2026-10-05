@@ -60,9 +60,9 @@ simulation_time = 0.0  # physical time to start with TODO in seconds?
 
 write_every = 100  # write output after every this many time steps
 
-num_particles = int(np.ceil(200*3.5))  # Number of particles
+num_particles = int(np.ceil(400*3.5))  # Number of particles
 emission_rate = 3.5  # droplets per second
-emitter_position = np.array([2.2, 82.1], dtype=np.float32)
+emitter_position = np.array([2.8, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
 test_run = False
@@ -187,7 +187,7 @@ if not drops_added_incremental:
 
 # Resume settings
 resume_simulation = True
-resume_simulation = False
+# resume_simulation = False
 
 resume_step = 0  # this will be read from the last sim
 resume_old_dt = np.inf  # 0.0001 this will be read from the last sim
@@ -208,7 +208,12 @@ if resume_simulation:
         resume_step,
         simulation_time,
         resume_old_dt,
-    ) = resume_simulation_from_file(data, param_filename + ".bak", maze, n_steps)
+    ) = resume_simulation_from_file(
+        data,
+        param_filename,
+        maze,
+        n_steps,
+    )
 
     print(
         f"Resuming from timestep {resume_step} "

@@ -451,12 +451,9 @@ def write_particles(
     forces_wall,
     timestep,
     simulation_time,
-    n_steps,
-    save_theta=False,
-    save_omega=False,
     save_forces=False,
 ):
-    t = timestep % n_steps
+    t = timestep % particles.shape[1]
 
     data = {
         "timestep": timestep,
@@ -465,13 +462,9 @@ def write_particles(
         "y": particles[:, t, 1],
         "vx": velocity[:, t, 0],
         "vy": velocity[:, t, 1],
+        "theta": theta[:, t],
+        "omega": ang_velocity[:, t],
     }
-
-    if save_theta:
-        data["theta"] = theta[:, t]
-
-    if save_omega:
-        data["omega"] = ang_velocity[:, t]
 
     if save_forces:
         data["f_self_propulsion"] = forces_self_propulsion
@@ -480,6 +473,7 @@ def write_particles(
         data["f_wall"] = forces_wall
 
     np.savez(f"{file_prefix}_{timestep}.npz", **data)
+
 
 
 def chemical_solver(
@@ -877,7 +871,6 @@ def chemical_solver(
                     timestep,
                     simulation_time,
                     num_particles,
-                    n_steps,
                 )
 
                 # Mark currently active particles as exited/dead
@@ -914,7 +907,6 @@ def chemical_solver(
                 timestep,
                 simulation_time,
                 num_particles,
-                n_steps,
             )
 
         # exit condition
@@ -956,7 +948,6 @@ def chemical_solver(
                 timestep,
                 simulation_time,
                 num_particles,
-                n_steps,
             )
             exit = True
             exit_timestep = timestep
