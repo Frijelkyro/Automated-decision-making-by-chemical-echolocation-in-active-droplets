@@ -49,6 +49,7 @@ from matplotlib.collections import LineCollection
 
 sys.path.append(os.path.join(os.getcwd(), "trajectory_video"))
 from maze_functions import maze_from_file, load_c_from_file, load_traj_from_file
+from list_of_functions import get_param_filename
 
 # Data directory
 data = "./data/"
@@ -66,14 +67,15 @@ timestamps = sorted(
 )
 
 # read the first trajectory file to determine the number of particles
-first_traj_data = np.loadtxt(data + f"part_{timestamps[0]}.txt", skiprows=3)
+first_traj_data = np.loadtxt(data + f"part_{timestamps[0]}.txt", skiprows=5)
 first_traj_data = np.atleast_2d(first_traj_data)  # Ensure it's a 2D array
 num_particles = first_traj_data.shape[0]
 
 
 # Load dt from parameter file
 def get_dt_from_params(filename):
-    with open(filename, "r") as file:
+    filename = get_param_filename(data)
+    with open(data+"/"+filename, "r") as file:
         for line in file:
             parts = line.strip().split(":")
             if len(parts) == 2 and parts[0].strip() == "dt":
@@ -274,7 +276,7 @@ fig.tight_layout()
 # Pre-load trajectory data
 print("Loading and preprocessing all trajectory data...")
 # Determine num_particles from first file
-first_traj_data = np.loadtxt(data + f"part_{timestamps[0]}.txt", skiprows=3)
+first_traj_data = np.loadtxt(data + f"part_{timestamps[0]}.txt", skiprows=5)
 first_traj_data = np.atleast_2d(first_traj_data)
 num_particles = first_traj_data.shape[0]
 
@@ -283,7 +285,7 @@ all_y_points = [[] for _ in range(num_particles)]
 trajectory_indices = {}
 
 for ts in timestamps:
-    traj_data = np.loadtxt(data + f"part_{ts}.txt", skiprows=3)
+    traj_data = np.loadtxt(data + f"part_{ts}.txt", skiprows=5)
     traj_data = np.atleast_2d(traj_data)
 
     for p in range(num_particles):

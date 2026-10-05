@@ -172,3 +172,54 @@ for REAPER_TIMER in 12.1; do  #0.4 0.2 0.1 0.01; do
 done
 
 echo "All Reaper Timer simulations complete!"
+
+
+# ============================================================
+# Section 4: exit time statistics
+# ============================================================
+
+ER=3.5
+DT=0.9
+CALCULATED_PARTICLES=$(echo "$ER * 400" | bc | cut -d'.' -f1)
+DESIRED_TIME=1000
+REAPER_TIMER=12.1
+SHOTS=100
+STATS_DIR="./output/exit_time_statistics/${ER}_emission_rate/${REAPER_TIMER}"
+mkdir -p "$STATS_DIR"
+
+sed -i -E "s/^num_particles = .*/num_particles = $CALCULATED_PARTICLES # Number of particles/" maze_cluster_script.py
+sed -i -E "s/^emission_rate = .*/emission_rate = $ER # droplets per second/" maze_cluster_script.py
+sed -i -E "s/^dt = .*/dt = $DT * 10 ** (-3) # time step size/" maze_cluster_script.py
+sed -i -E "s/^desired_time = .*/desired_time = $DESIRED_TIME/" maze_cluster_script.py
+sed -i -E "s/^grim_reaper_delay = .*/grim_reaper_delay = $REAPER_TIMER/" maze_cluster_script.py
+sed -i -E "s/^resume_simulation = .*/resume_simulation = False/" maze_cluster_script.py
+sed -i -E "s/^test_run = .*/test_run = False/" maze_cluster_script.py
+
+for ((SHOT=1; SHOT<=SHOTS; SHOT++)); do
+    echo "=== Shot $SHOT / $SHOTS ==="
+    rm -f ./data/conc*.txt ./data/part*.txt ./data/*.mp4 ./data/param*.txt ./data/param.txt.bak
+
+    sed -i -E "s/^dt = .*/dt = $DT * 10 ** (-3) # time step size/" maze_cluster_script.py
+    sed -i -E "s/^resume_simulation = .*/resume_simulation = False/" maze_cluster_script.py
+    python maze_cluster_script.py
+    exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        sed -i -E "s/^dt = .*/dt = $DT \/ 2 * 10 ** (-3) # time step size/; s/^resume_simulation = .*/resume_simulation = True/" maze_cluster_script.py
+        python maze_cluster_script.py
+        exit_code=$?
+    fi
+
+    if [ "$exit_code" -ne 0 ]; then
+        sed -i -E "s/^dt = .*/dt = $DT \/ 4 * 10 ** (-3) # time step size/" maze_cluster_script.py
+        python maze_cluster_script.py
+        exit_code=$?
+    fi
+
+    sed -i -E "s/^dt = .*/dt = $DT * 10 ** (-3) # time step size/; s/^resume_simulation = .*/resume_simulation = False/" maze_cluster_script.py
+
+    [ "$exit_code" -eq 0 ] && [ -f ./data/param.txt.bak ] &&
+        python process_exit_statistics.py "$SHOT" "$STATS_DIR"
+done
+
+echo "=== Finished $SHOTS statistical shots ==="

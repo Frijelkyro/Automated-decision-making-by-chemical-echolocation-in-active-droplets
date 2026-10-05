@@ -111,17 +111,16 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
     print(f"Using parameter file: {param_filename}")
     old = _read_parameter_file(param_filename)
 
-    old_dt = float(old["dt"])
-    num_particles = int(old["num_particles"])
-    resume_step = int(old["resume_step"])
-    resume_time = float(old["simulation_time"])
-    dead_tracker = np.array([x == "True" for x in old["dead_tracker"].strip("[]").split()], dtype=bool)
-    active_mask = np.array([x == "True" for x in old["active_mask"].strip("[]").split()], dtype=bool)    
-    birth_times = np.fromstring(old["birth_times"].strip("[]").replace("\n", " "), sep=" ")
-    exit_trigger_time = np.fromstring(old["exit_trigger_time"].strip("[]").replace("\n", " "), sep=" ")
+    state_filename = param_filename.removesuffix(".bak").removesuffix(".txt") + "_state.npz"
+    state = np.load(state_filename + ".bak")
 
-    file_prefix_conc = str(old["file_prefix_conc"])
-    file_prefix_part = str(old["file_prefix_part"])
+    birth_times = state["birth_times"]
+    active_mask = state["active_mask"]
+    dead_tracker = state["dead_tracker"]
+    exit_trigger_time = state["exit_trigger_time"]
+    resume_step = int(state["resume_step"])
+    resume_time = float(state["simulation_time"])
+    num_particles = int(old["num_particles"])
 
     for prefix in ("conc", "part"):
         for f in os.listdir(data):
@@ -129,9 +128,7 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
             if m and int(m.group(1)) > resume_step:
                 os.remove(os.path.join(data, f))
 
-    conc = _read_concentration(f"{file_prefix_conc}_{resume_step}.txt", maze, n_steps)
-    p, theta, v, omega = _read_particles(
-        f"{file_prefix_part}_{resume_step}.txt", num_particles, n_steps
-    )
+    conc = _read_concentration(f"{old['file_prefix_conc']}_{resume_step}.txt", maze, n_steps)
+    p, theta, v, omega = _read_particles(f"{old['file_prefix_part']}_{resume_step}.txt", num_particles, n_steps)
 
-    return conc, p, theta, v, omega, active_mask, dead_tracker, exit_trigger_time, birth_times, resume_step, resume_time, old_dt
+    return conc, p, theta, v, omega, active_mask, dead_tracker, exit_trigger_time, birth_times, resume_step, resume_time, float(old["dt"])
