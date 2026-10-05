@@ -358,6 +358,44 @@ def write_parameters(**parameters):
 
     return numbered_filename
 
+def write_param_snapshot(parameters, simulation_time, resume_step):
+    param_filename = parameters.get("param_filename", "parameters.txt")
+    with open(param_filename, "w") as f:
+        for key, value in parameters.items():
+            f.write(f"{key}: {value}\n")
+        f.write(f"simulation_time:{simulation_time}\n")
+        f.write(f"resume_step:{resume_step}\n")
+
+def get_param_filename(data):
+    param_files = []
+    
+    for filename in os.listdir(data):
+        match = re.fullmatch(r"param(\d+)\.txt", filename)
+        if match:
+            number = int(match.group(1))
+            param_files.append((number, filename))
+
+    if not param_files:
+        return None
+
+    # Select the file with the highest integer
+    _, filename = max(param_files)
+    filename = str(filename)
+    return filename
+
+# Load dt from the parameter file with the highest integer suffix
+def get_dt_from_params(data):
+
+    filename=get_param_filename(data)
+
+    with open(data+"/"+filename, "r") as file:
+        for line in file:
+            parts = line.strip().split(":")
+            if len(parts) == 2 and parts[0].strip() == "dt":
+                return float(parts[1].strip())
+
+    return None
+
 
 def write_grid(grid_filename, nx, ny):
     with open(grid_filename, "w") as f:
@@ -797,8 +835,8 @@ def chemical_solver(
                 bad_particles = np.where(active_mask)[0][unsafe]
 
                 print(
-                    f"Particle out of safe grid bounds at timestep {timestep}. "
-                    f"Particles: {bad_particles.tolist()}"
+                    f"\n OUT-OF-BOUNDS ERROR\nParticle out of safe grid bounds at timestep {timestep}. "
+                    f"Particle id(s): {bad_particles.tolist()}"
                 )
 
                 # Save the current state/output before terminating
