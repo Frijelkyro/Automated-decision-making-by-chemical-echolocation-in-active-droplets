@@ -428,9 +428,10 @@ with open(filename2, "a") as f:
 
 sim_duration_perf_metric = perf_counter() - simulation_t0
 
-with open(param_filename, "a") as f:
-    f.write(f"emission_rate: {emission_rate:.3f}")
-    f.write(f"Initialization time: {init_time:.3f} s\n")
-    f.write(f"Total simulation time: {total_time:.3f} s\n")
+print(param_filename)
+with open(param_filename, "a") as f:  # type: ignore
+    f.write(f"emission_rate: {emission_rate:.3f}\n")
+    f.write(f"init_duration_perf_metric: {init_duration_perf_metric:.3f} s\n")
+    f.write(f"sim_duration_perf_metric: {sim_duration_perf_metric:.3f} s\n")
 
 print(f"This simulation duration (performance metric): {sim_duration_perf_metric:.3f} s")
