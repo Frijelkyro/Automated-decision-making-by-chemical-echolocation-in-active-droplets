@@ -207,29 +207,16 @@ if resume_simulation:
         simulation_time,
         resume_old_dt,
     ) = resume_simulation_from_file(
-        data=resume_data,
-        maze=maze,
-        num_particles=num_particles,
-        n_steps=n_steps,
-        emitter_position=emitter_position,
-        emission_rate=emission_rate,
+        data,
+        param_filename,
+        maze,
+        n_steps
     )
 
     print(
         f"Resuming from timestep {resume_step} "
         f"(t = {simulation_time:.6f} s, old dt = {resume_old_dt})"
     )
-    # Birth times are physical times, not timestep numbers.
-    birth_times = np.array(
-        [i / emission_rate for i in range(num_particles)],
-        dtype=np.float64,
-    )
-
-    exit_trigger_time = np.full(num_particles, np.inf)
-
-else:
-    resume_step = 0
-    simulation_time = 0.0
 
     
 # build a parameter dictionary
@@ -327,7 +314,9 @@ for i in pbar:
         **parameter_dict,
     )
 
-    simulation_time += (n_steps - 1) * dt
+    write_param_snapshot(parameter_dict, simulation_time, resume_step+i*n_steps)
+
+    simulation_time += n_steps * dt
 
     if exit:
         # current_time = np.repeat(
