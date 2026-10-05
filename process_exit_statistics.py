@@ -2,42 +2,23 @@
 
 import sys
 from pathlib import Path
-
 import numpy as np
-
-
-# ------------------------------------------------------------
-# Arguments
-# ------------------------------------------------------------
 
 shot = int(sys.argv[1])
 stats_dir = Path(sys.argv[2])
 
-param_file = Path("./data/param.txt.bak")
+state_file = Path("./data/param_state.npz")
 output_file = stats_dir / f"shot_{shot:04d}.npz"
 
+if not state_file.exists():
+    raise FileNotFoundError(f"State file not found: {state_file}")
 
-# ------------------------------------------------------------
-# Read param.txt.bak
-# ------------------------------------------------------------
-
-data = {}
-
-with param_file.open("r") as f:
-    exec(f.read(), {}, data)
-
-
-# ------------------------------------------------------------
-# Extract arrays
-# ------------------------------------------------------------
-
-birth_times = np.asarray(data["birth_times"], dtype=float)
-exit_trigger_time = np.asarray(data["exit_trigger_time"], dtype=float)
-
-
-# ------------------------------------------------------------
-# Store shot
-# ------------------------------------------------------------
+with np.load(state_file) as state:
+    birth_times = np.asarray(state["birth_times"], dtype=float)
+    exit_trigger_time = np.asarray(
+        state["exit_trigger_time"],
+        dtype=float,
+    )
 
 stats_dir.mkdir(parents=True, exist_ok=True)
 

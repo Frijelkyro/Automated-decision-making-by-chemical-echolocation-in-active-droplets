@@ -48,8 +48,8 @@ n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
 n_steps = 100  # number of time steps 40000
 time_loop = 2250  # number of time loops
-dt = 0.25 * 10 ** (-3)  # time step size
-desired_time = 250
+dt = .50000000000000000000 * 10 ** (-3) # time step size
+desired_time = 80
 if desired_time:
     time_loop = int(np.ceil(desired_time / n_steps / dt))
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
@@ -60,8 +60,8 @@ simulation_time = 0.0  # physical time to start with TODO in seconds?
 
 write_every = 100  # write output after every this many time steps
 
-num_particles = int(np.ceil(400*3.5))  # Number of particles
-emission_rate = 3.5  # droplets per second
+num_particles = 60 # Number of particles
+emission_rate = 0.5 # droplets per second
 emitter_position = np.array([2.8, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
@@ -90,7 +90,7 @@ if test_run:
 wall = np.transpose(np.where(maze == 0))
 
 exit_radius = 20.0  # radius of the exit around the target (static source)
-grim_reaper_delay = 6.1
+grim_reaper_delay = 6.0
 exit_wall_radius = 20.0  # radius for the leaky exit wall (this also removes particles when they get <2 pixels close)
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 

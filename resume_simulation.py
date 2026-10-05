@@ -1,6 +1,5 @@
 import ast
 import os
-import re
 import numpy as np
 
 
@@ -26,33 +25,17 @@ def _read_concentration(filename, n_steps):
     with np.load(filename) as data:
         concentration = data["concentration"]
 
-    c = np.zeros(
-        (n_steps, *concentration.shape),
-        dtype=concentration.dtype,
-    )
+    c = np.zeros((n_steps, *concentration.shape), dtype=concentration.dtype)
     c[0] = concentration
-
     return c
 
 
 def _read_particles(filename, num_particles, n_steps):
     with np.load(filename) as data:
-        p = np.zeros(
-            (num_particles, n_steps, 2),
-            dtype=data["x"].dtype,
-        )
-        v = np.zeros(
-            (num_particles, n_steps, 2),
-            dtype=data["vx"].dtype,
-        )
-        theta = np.zeros(
-            (num_particles, n_steps),
-            dtype=data["theta"].dtype,
-        )
-        omega = np.zeros(
-            (num_particles, n_steps),
-            dtype=data["omega"].dtype,
-        )
+        p = np.zeros((num_particles, n_steps, 2), dtype=data["x"].dtype)
+        v = np.zeros((num_particles, n_steps, 2), dtype=data["vx"].dtype)
+        theta = np.zeros((num_particles, n_steps), dtype=data["theta"].dtype)
+        omega = np.zeros((num_particles, n_steps), dtype=data["omega"].dtype)
 
         p[:, 0, 0] = data["x"]
         p[:, 0, 1] = data["y"]
@@ -65,10 +48,11 @@ def _read_particles(filename, num_particles, n_steps):
 
 
 def resume_simulation_from_file(data, param_filename, maze, n_steps):
-    print(f"Using parameter file: {param_filename}")
+    param_filename = os.path.join(data, "param.txt.bak")
+    print(f"Using recovery parameter file: {param_filename}")
 
     old = _read_parameter_file(param_filename)
-    state_filename = os.path.splitext(param_filename)[0] + "_state.npz.bak"
+    state_filename = os.path.join(data, "param_state.npz.bak")
 
     with np.load(state_filename) as state:
         birth_times = state["birth_times"]
@@ -83,8 +67,9 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
     part_prefix = str(old["file_prefix_part"])
 
     for prefix in (conc_prefix, part_prefix):
+        prefix = os.path.basename(prefix)
         for filename in os.listdir(data):
-            if filename.startswith(os.path.basename(prefix) + "_") and filename.endswith(".npz"):
+            if filename.startswith(prefix + "_") and filename.endswith(".npz"):
                 step = int(filename.rsplit("_", 1)[1][:-4])
                 if step > resume_step:
                     os.remove(os.path.join(data, filename))
