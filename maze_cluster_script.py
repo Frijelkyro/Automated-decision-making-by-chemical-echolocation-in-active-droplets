@@ -47,7 +47,7 @@ Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
 n_steps = 5000  # number of time steps 40000
-dt = 0.09 * 10 ** (-3)  # time step size
+dt = 0.51 * 10 ** (-3)  # time step size
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
 time_loop = 100  # number of time loops
 
@@ -67,7 +67,7 @@ time = time[np.newaxis, :]
 write_every = 100  # write output after every this many time steps
 
 num_particles = 350  # Number of particles
-emission_rate = 3.5  # droplets per second
+emission_rate = 3  # droplets per second
 emitter_position = np.array([4.1, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
@@ -96,13 +96,13 @@ if test_run:
 wall = np.transpose(np.where(maze == 0))
 
 exit_radius = 20.0  # radius of the exit around the target (static source)
-grim_reaper_delay = 0.1
+grim_reaper_delay = 12.1
 exit_wall_radius = 20.0  # radius for the leaky exit wall (this also removes particles when they get <2 pixels close)
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 if test_run:
     # num_particles = int(num_particles * 0.1 // 1)
-    n_steps = int(n_steps * 0.01 // 1)  # preferably 600
+    n_steps = int(n_steps * 0.1 // 1)  # preferably 600
     # time_loop = int(time_loop * 0.1 // 1)  # preferably 10
     write_every = 100
     static_source_position = (42.5, 10.5)  # Position of the static source
@@ -304,7 +304,7 @@ for i in pbar:
         **parameter_dict,
     )
 
-    write_param_snapshot(parameter_dict, simulation_time, resume_step + i * n_steps)
+    if not exit: write_param_snapshot(parameter_dict, simulation_time, resume_step + i * n_steps)
 
     simulation_time += (n_steps - 1) * dt
 
@@ -423,12 +423,12 @@ with open(filename2, "a") as f:
 
 sim_duration_perf_metric = perf_counter() - simulation_t0
 
-print(param_filename)
-with open(param_filename, "a") as f:  # type: ignore
-    f.write(f"emission_rate: {emission_rate:.3f}\n")
-    f.write(f"init_duration_perf_metric: {init_duration_perf_metric:.3f} s\n")
-    f.write(f"sim_duration_perf_metric: {sim_duration_perf_metric:.3f} s\n")
+# print(param_filename)
+# with open(param_filename, "a") as f:  # type: ignore
+#     f.write(f"emission_rate: {emission_rate:.3f}\n")
+#     f.write(f"init_duration_perf_metric: {init_duration_perf_metric:.3f} s\n")
+#     f.write(f"sim_duration_perf_metric: {sim_duration_perf_metric:.3f} s\n")
 
 print(
-    f"This simulation duration (performance metric): {sim_duration_perf_metric:.3f} s"
+    f"\nThis simulation duration (performance metric): {sim_duration_perf_metric:.3f} s"
 )

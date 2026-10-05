@@ -349,7 +349,6 @@ def write_parameters(**parameters):
         directory or ".",
         f"param{next_number:02d}.txt",
     )
-    print(numbered_filename)
     with open(numbered_filename, "w") as param_file:
         for key, value in parameters.items():
             param_file.write(f"{key}: {value}\n")
@@ -838,6 +837,9 @@ def chemical_solver(
                     f"\n OUT-OF-BOUNDS ERROR\nParticle out of safe grid bounds at timestep {timestep}. "
                     f"Particle id(s): {bad_particles.tolist()}"
                 )
+
+                # clear the last param.txt as the param.bak should be used
+                os.remove(param_filename) if os.path.exists(param_filename) else None
 
                 # Save the current state/output before terminating
                 write_concentration(
