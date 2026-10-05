@@ -5,6 +5,7 @@ output/*
 output
 particle_trajectory.mp4
 .python-version
+evaluation-scripts/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
