@@ -47,14 +47,14 @@ Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
 n_steps = 5000  # number of time steps 40000
-dt = 0.25 * 10 ** (-3)  # time step size
+dt = 0.9 * 10 ** (-3)  # time step size
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
 time_loop = 100  # number of time loops
 
 # global_step = 0      # integer, mainly for output filenames
 # local_step = 0       # integer, position within the current solver call
 # buffer_index = 0     # index into p/v/theta/c rolling arrays
-simulation_time = 0.0  # physical time in seconds
+simulation_time = 0.0  # physical time in seconds (will be overweritten if resume_simulation)
 
 #start_time = 0.0
 #start_step = 0
@@ -185,12 +185,11 @@ if not drops_added_incremental:
 # Resume settings
 resume_simulation = False
 
-resume_timestep = 900  # this will be read from the last sim
-resume_data = data
+resume_step = 0  # this will be read from the last sim
 resume_old_dt = np.inf  # 0.0001 this will be read from the last sim
 resume_new_dt = dt
 full_traj = np.empty((num_particles, 0, 15), dtype=np.float32)
-exit_times = np.full(num_particles, np.inf)
+exit_trigger_time  = np.full(num_particles, np.inf)
 
 if resume_simulation:
     (
@@ -269,14 +268,12 @@ parameter_dict = {
 }
 
 # --------------- time tracking ---------------------
-init_time = perf_counter() - init_t0  # time tracking
+init_duration_perf_metric = perf_counter() - init_t0  # time tracking
 print(
-    f"Initialization time: {init_time:.3f} s | particles: {num_particles} | n_steps/loop: {n_steps} | maze.shape: {maze.shape} | concentration shape: {conc.shape} | emission_rate: {emission_rate} | dt: {dt}"
+    f"Initialization time: {init_duration_perf_metric:.3f} s | particles: {num_particles} | n_steps/loop: {n_steps} | maze.shape: {maze.shape} | concentration shape: {conc.shape} | emission_rate: {emission_rate} | dt: {dt}"
 )
-
 simulation_t0 = perf_counter()  # time tracking
 n_active = active_mask.sum()
-
 pbar = tqdm(range(time_loop), desc="Simulation", unit="loop")
 
 # ---------------- Simulation loop ------------------
@@ -304,12 +301,8 @@ for i in pbar:
         v,
         omega,
         maze,
-        exit_times,
-        start_step=(
-            resume_timestep + i * n_steps
-            if resume_simulation
-            else i * n_steps
-        ),
+        exit_trigger_time,
+        start_step=resume_step + i * n_steps,
         start_time=simulation_time,
         **parameter_dict,
     )
@@ -423,22 +416,21 @@ if not os.path.isfile(filename2):
 # Append the data to the file
 with open(filename2, "a") as f:
     for particle_id in range(num_particles):
-        if not np.isfinite(exit_times[particle_id]):
+        if not np.isfinite(exit_trigger_time[particle_id]):
             f.write(
                 f"{-1} {beta} {job_id} {particle_id}\n"
             )   
         else:
             f.write(
-                f"{max((exit_times[particle_id]-birth_times[particle_id]), -1)} {beta} {job_id} {particle_id}\n"
+                f"{max((exit_trigger_time [particle_id]-birth_times[particle_id]), -1)} {beta} {job_id} {particle_id}\n"
             )
         
 
-total_time = perf_counter() - simulation_t0
-param_filename = data + "/param.txt"
+sim_duration_perf_metric = perf_counter() - simulation_t0
 
 with open(param_filename, "a") as f:
     f.write(f"emission_rate: {emission_rate:.3f}")
     f.write(f"Initialization time: {init_time:.3f} s\n")
     f.write(f"Total simulation time: {total_time:.3f} s\n")
 
-print(f"Total simulation time: {total_time:.3f} s")
+print(f"This simulation duration (performance metric): {sim_duration_perf_metric:.3f} s")
