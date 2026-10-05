@@ -6,93 +6,12 @@
 # TODO Fix Video saving Issue
 log_and_exit_times_recovery() {
     local target_log_dir="$1"   # Argument 1: Path to the crash log destination
-    local output_file="data/exit_times.txt"
 
     echo "=== Simulation failed! Running fallback data retrieval ==="
 
-    # 1. Backup crash logs and run video maker
     mkdir -p "$target_log_dir"
     cp -r data/* "$target_log_dir/"
-
-    # 2. Extract TIME_INCREMENT float from data/param.txt
-    local time_increment
-    time_increment=$(awk '/^dt:[[:space:]]*/ {print $2}' data/param.txt)
-
-    # 3. Extract all numbers, sort numerically for ascending and descending arrays
-    local all_timesteps_asc=($(ls data/part_*.txt 2>/dev/null | sed 's/[^0-9]//g' | sort -n))
-    local all_timesteps_desc=($(ls data/part_*.txt 2>/dev/null | sed 's/[^0-9]//g' | sort -rn))
-    
-    if [ ${#all_timesteps_asc[@]} -eq 0 ]; then
-        echo "Error: No data files found to process."
-        return 1
-    fi
-    
-    local first_timestep_file="${all_timesteps_asc[0]}"
-    local max_timestep_file="${all_timesteps_desc[0]}"
-    
-    # 4. Get the un-injected "baseline" coordinates (last particle's position in step 0)
-    local baseline_coords=($(awk '$1 ~ /^[0-9]+$/ {x=$2; y=$3} END {print x, y}' "data/part_${first_timestep_file}.txt"))
-    local base_x="${baseline_coords[0]}"
-    local base_y="${baseline_coords[1]}"
-    
-    # 5. Find ordered array of particle IDs that are "nan" in the final step
-    local nan_particles=($(awk '$1 ~ /^[0-9]{1,4}$/ && $2 == "nan" {print $1}' "data/part_${max_timestep_file}.txt" | sort -n))
-
-    if [[ ! -f "$output_file" ]]; then
-        echo "ExitTime Beta JobID ParticleID" > "$output_file"
-    fi
-
-    # 6. Process each exited particle
-    for pid in "${nan_particles[@]}"; do
-        local exit_timestep=""
-        local start_timestep=""
-        
-        # --- A. Scan BACKWARDS to find the last known position before exiting ---
-        for ts in "${all_timesteps_desc[@]}"; do
-            local status
-            status=$(awk -v id="$pid" '$1 == id { print ($2 != "nan" && $2 != "") ? "MATCH" : "NAN"; exit }' "data/part_${ts}.txt")
-            
-            if [ "$status" = "MATCH" ]; then
-                exit_timestep="$ts"
-                break
-            fi
-        done
-
-        if [ -n "$exit_timestep" ]; then
-            # --- B. Scan FORWARDS to find the first active movement ---
-            for ts in "${all_timesteps_asc[@]}"; do
-                local moved
-                moved=$(awk -v id="$pid" -v bx="$base_x" -v by="$base_y" '
-                    $1 == id {
-                        # A particle is active if it is not nan AND its coordinates do not match the baseline
-                        if ($2 != "nan" && $2 != "" && ($2 != bx || $3 != by)) {
-                            print "MOVED"
-                        } else {
-                            print "WAIT"
-                        }
-                        exit
-                    }' "data/part_${ts}.txt")
-                
-                if [ "$moved" = "MOVED" ]; then
-                    start_timestep="$ts"
-                    break
-                fi
-            done
-            
-            # Failsafe: if no movement was detected, default to the very first file
-            if [ -z "$start_timestep" ]; then
-                start_timestep="$first_timestep_file"
-            fi
-
-            # --- C. Calculate the delta and append ---
-            local exit_time
-            exit_time=$(echo "($exit_timestep - $start_timestep) * $time_increment" | bc -l)
-            printf "%.3f -8 1 %d\n" "$exit_time" "$pid" >> "$output_file"
-        else
-            printf "-1 -8 1 %d\n" "$pid" >> "$output_file"
-        fi
-    done
-
+    python recovery.py
     echo "Fallback data recovery complete."
 }
 
@@ -160,7 +79,7 @@ mkdir --parents ./output/videos
 #    # Calculate particles
 #    CALCULATED_PARTICLES=$(echo "$ER * 100" | bc | cut -d'.' -f1)
 #    echo "=== Running simulation: emission_rate = $ER ($CALCULATED_PARTICLES particles) ==="
-#    mkdir --parents "./output/${ER}_emission_rate"
+#    mkdir --parents "./output/dripping_release/${ER}_emission_rate" #TEST THIS
 #
 #    # Use a case statement instead of integer comparison for floats
 #    case "$ER" in
@@ -214,8 +133,8 @@ mkdir --parents ./output/videos
 ## for REAPER_TIMER in 64.0 32.0 16.0 8.0 4.0 2.0 1.0 0.5 0.25 0.1 0.05 0 ; do
 # for REAPER_TIMER in 64.0 32.0 16.0 8.0 4.0 2.0 1.0 0.5 0.25 0.1 0.05 0 ; do
 # for REAPER_TIMER in 48.0 24.0 12.0 6.0 3.0 1.6 0.8 0.4 0.2 0.1 0.01; do
-for REAPER_TIMER in 12.0 6.0 3.0; do  #0.4 0.2 0.1 0.01; do
-    ER=1
+for REAPER_TIMER in 12.1; do  #0.4 0.2 0.1 0.01; do
+    ER=3.5
     DT=0.25
     CALCULATED_PARTICLES=$(echo "$ER * 100" | bc | cut -d'.' -f1)
     sed -i -E "s/^num_particles = [0-9]+(\s*#.*)?\$/num_particles = $CALCULATED_PARTICLES # Number of particles/" maze_cluster_script.py
@@ -224,7 +143,7 @@ for REAPER_TIMER in 12.0 6.0 3.0; do  #0.4 0.2 0.1 0.01; do
 
     echo "=== Running simulation for REAPER_TIMER = $REAPER_TIMER ==="
     rm -f ./data/conc*.txt ./data/part*.txt ./data/*.mp4
-    d="./output/reaper_timer/${REAPER_TIMER}_until_death"
+    d="./output/reaper_timer/${ER}_emission_rate/${REAPER_TIMER}_until_death"
     mkdir --parents "${d}/data/"
     sed -i -E "s/^[[:space:]]*grim_reaper_delay[[:space:]]*=.*/grim_reaper_delay = $REAPER_TIMER/" maze_cluster_script.py
     python maze_cluster_script.py
