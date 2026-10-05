@@ -414,14 +414,11 @@ def write_grid(grid_filename, nx, ny):
                 f.write(f"{i} {j}\n")
 
 
-def write_concentration(file_prefix, c, time_steps, n_steps):
-    for t in time_steps:
-        filename = f"{file_prefix}_{t}.txt"
-        with open(filename, "w") as f:
-            f.write("TIMESTEP:\n")
-            f.write(f"{t}\n")
-            f.write("DATA:c\n")
-            np.savetxt(f, c[t % n_steps].ravel(), fmt="%.16f")
+def write_concentration(file_prefix, c, timestep, simulation_time, n_steps):
+    filename = f"{file_prefix}_{timestep}.txt"
+    with open(filename, "w") as f:
+        f.write(f"TIMESTEP:\n{timestep}\nTIME:\n{simulation_time}\nDATA:\n")
+        np.savetxt(f, c[timestep % n_steps].ravel(), fmt="%.16f")
 
 
 def write_particles(
@@ -434,27 +431,28 @@ def write_particles(
     forces_chemotaxis,
     forces_interaction,
     forces_wall,
-    time_steps,
+    timestep,
+    simulation_time,
     num_particles,
     n_steps,
 ):
-    for t in time_steps:
-        filename = f"{file_prefix}_{t}.txt"
-        with open(filename, "w") as f:
-            f.write("TIMESTEP:\n")
-            f.write(f"{t}\n")
+    filename = f"{file_prefix}_{timestep}.txt"
+    t = timestep % n_steps
+    with open(filename, "w") as f:
+        f.write(f"TIMESTEP:\n{timestep}\nTIME:\n{simulation_time}\n")
+        f.write(
+            "DATA: particle_id x y theta vx vy omega f_spx f_spy f_chemx f_chemy f_intx f_inty f_wallx f_wally\n"
+        )
+        for particle_id in range(num_particles):
             f.write(
-                "DATA: particle_id x y theta vx vy omega f_spx f_spy f_chemx f_chemy f_intx f_inty f_wallx f_wally\n"
+                f"{particle_id} {particles[particle_id,t,0]} {particles[particle_id,t,1]} {theta[particle_id,t]} "
+                f"{velocity[particle_id,t,0]} {velocity[particle_id,t,1]} {ang_velocity[particle_id,t]} "
+                f"{forces_self_propulsion[particle_id,0]} {forces_self_propulsion[particle_id,1]} "
+                f"{forces_chemotaxis[particle_id,0]} {forces_chemotaxis[particle_id,1]} "
+                f"{forces_interaction[particle_id,:,0].sum()} {forces_interaction[particle_id,:,1].sum()} "
+                f"{forces_wall[particle_id,0]} {forces_wall[particle_id,1]}\n"
             )
-            for particle_id in range(num_particles):
-                f.write(
-                    f"{particle_id} {particles[particle_id, t % n_steps, 0]} {particles[particle_id, t % n_steps, 1]} {theta[particle_id, t % n_steps]} "
-                    f"{velocity[particle_id, t % n_steps, 0]} {velocity[particle_id, t % n_steps, 1]} {ang_velocity[particle_id, t % n_steps]} "
-                    f"{forces_self_propulsion[particle_id, 0]} {forces_self_propulsion[particle_id, 1]} "
-                    f"{forces_chemotaxis[particle_id, 0]} {forces_chemotaxis[particle_id, 1]} "
-                    f"{forces_interaction[particle_id, :, 0].sum()} {forces_interaction[particle_id, :, 1].sum()} "
-                    f"{forces_wall[particle_id, 0]} {forces_wall[particle_id, 1]}\n"
-                )
+
 
 def chemical_solver(
     c,
@@ -846,7 +844,8 @@ def chemical_solver(
                 write_concentration(
                     file_prefix_conc,
                     c,
-                    [timestep],
+                    timestep,
+                    simulation_time,
                     n_steps,
                 )
 
@@ -860,7 +859,8 @@ def chemical_solver(
                     forces_chemotaxis,
                     forces_interaction,
                     forces_wall,
-                    [timestep],
+                    timestep,
+                    simulation_time,
                     num_particles,
                     n_steps,
                 )
@@ -876,9 +876,9 @@ def chemical_solver(
                 # Save parameters so this run can be resumed/inspected
                 write_parameters(**kwargs)
 
+
                 break
             ## ----------------------------------------------------------------------------
-
 
         # Write concentration and particle data
         if local_step == 0 and start_step == 0:
@@ -886,7 +886,7 @@ def chemical_solver(
             write_grid(grid_filename, nx, ny)
 
         if local_step % write_every == 0:
-            write_concentration(file_prefix_conc, c, [timestep], n_steps)
+            write_concentration(file_prefix_conc, c, timestep, simulation_time, n_steps)
             write_particles(
                 file_prefix_part,
                 position,
@@ -897,7 +897,8 @@ def chemical_solver(
                 forces_chemotaxis,
                 forces_interaction,
                 forces_wall,
-                [timestep],
+                timestep,
+                simulation_time,
                 num_particles,
                 n_steps,
             )
@@ -927,7 +928,7 @@ def chemical_solver(
         # Check if all particles have successfully exited or died
         has_exited_or_died = np.isfinite(exit_trigger_time) | dead_tracker
         if np.all(has_exited_or_died):
-            write_concentration(file_prefix_conc, c, [timestep], n_steps)
+            write_concentration(file_prefix_conc, c, timestep, simulation_time, n_steps)
             write_particles(
                 file_prefix_part,
                 position,
@@ -938,7 +939,8 @@ def chemical_solver(
                 forces_chemotaxis,
                 forces_interaction,
                 forces_wall,
-                [timestep],
+                timestep,
+                simulation_time,
                 num_particles,
                 n_steps,
             )

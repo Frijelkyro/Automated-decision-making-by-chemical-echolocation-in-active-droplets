@@ -105,7 +105,7 @@ def maze_from_file(file_path):
 def load_c_from_file(maze, filename):
     nx = maze.shape[0]
     ny = maze.shape[1]
-    c = np.loadtxt(filename, skiprows=3).reshape((nx, ny))
+    c = np.loadtxt(filename, skiprows=5).reshape((nx, ny))
     return c
 
 

@@ -44,7 +44,7 @@ def _read_concentration(filename, maze, n_steps):
 
     c = np.zeros((n_steps, nx, ny), dtype=np.float32)
 
-    data = np.loadtxt(filename, skiprows=3)
+    data = np.loadtxt(filename, skiprows=5)
 
     expected_size = nx * ny
 
@@ -72,7 +72,7 @@ def _read_particles(filename, num_particles, n_steps):
 
     data = np.genfromtxt(
         filename,
-        skip_header=3,
+        skip_header=5,
         dtype=np.float64,
     )
 
