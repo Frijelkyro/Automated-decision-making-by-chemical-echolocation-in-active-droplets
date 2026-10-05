@@ -1,345 +1,135 @@
+import os, re, glob, ast, shutil
 import numpy as np
 import matplotlib
-
-matplotlib.use("Agg")  # Use non-interactive backend suitable for saving files
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import seaborn as sns
-import shutil
-
-# Turn off interactive mode
-plt.ioff()
-plt.rcParams["interactive"] = False
-
-# Basic clean styling
-sns.set_style("ticks")
-
-# Font and tick settings (LaTeX removed)
-plt.rc("axes", titlesize=30)
-plt.rc("axes", labelsize=30)
-plt.rc("xtick", labelsize=30)
-plt.rc("ytick", labelsize=30)
-plt.rc("legend", fontsize=30)
-plt.rc("font", family="serif")
-plt.rc("xtick", direction="in")
-plt.rc("ytick", direction="in")
-
-plt.rcParams["xtick.major.pad"] = 10
-plt.rcParams["xtick.minor.visible"] = True
-plt.rcParams["ytick.minor.visible"] = True
-plt.rcParams["xtick.major.size"] = 7
-plt.rcParams["xtick.major.width"] = 2
-plt.rcParams["xtick.minor.size"] = 5
-plt.rcParams["xtick.minor.width"] = 1
-plt.rcParams["ytick.major.size"] = 7
-plt.rcParams["ytick.major.width"] = 2
-plt.rcParams["ytick.minor.size"] = 5
-plt.rcParams["ytick.minor.width"] = 1
-plt.rcParams["axes.linewidth"] = 2
-
-# Animation for Large maze
 import matplotlib.animation as animation
-import sys
-import os
-import re
 from matplotlib.colors import Normalize
-import matplotlib.patches as patches
-import glob
-from datetime import datetime
-from matplotlib.collections import LineCollection
+from maze_functions import maze_from_file, load_c_from_file
 
-sys.path.append(os.path.join(os.getcwd(), "trajectory_video"))
-from maze_functions import maze_from_file, load_c_from_file, load_traj_from_file
+DATA = "./data"
+MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv"
+PARAM = os.path.join(DATA, "param.txt")
+if not os.path.isfile(PARAM):
+    PARAM = os.path.join(DATA, "param.txt.bak")
+GRID = os.path.join(DATA, "grid.txt")
+SHOW_TRAJECTORIES = False
 
-# Data directory
-data = "./data/"
+# Read colon-separated parameters, including multiline arrays.
+params, key, value = {}, None, ""
+for line in open(PARAM):
+    if ":" in line:
+        if key:
+            try: params[key] = ast.literal_eval(value)
+            except: params[key] = value.strip()
+        key, value = map(str.strip, line.split(":", 1))
+    elif key:
+        value += " " + line.strip()
+if key:
+    try: params[key] = ast.literal_eval(value)
+    except: params[key] = value.strip()
 
-# Load the maze
-maze = maze_from_file("./different_mazes/Ran_maze_size_prop_to_droplet.tsv")
-maze = maze_from_file("./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv")
-# maze = maze_from_file('./different_mazes/empty_box.tsv')
+# Grid geometry: BOX gives physical limits, SHAPE gives array dimensions.
+grid = open(GRID).read()
+
+lines = grid.splitlines()
+i, j = lines.index("BOX:"), lines.index("SHAPE:")
+box = np.array([list(map(float, x.split())) for x in lines[i+1:j] if x.strip()])
+shape = tuple(map(int, lines[j+1].split()))
+
+maze = maze_from_file(MAZE)
 wall = np.transpose(np.where(maze == 0))
+source = np.asarray(params["static_source_position"], float)
+radius = float(params.get("exit_radius", 20))
 
-# Get all available timestamps by listing files
-traj_files = sorted(glob.glob(data + "part_*.txt"))
 timestamps = sorted(
-    [int(re.search(r"part_(\d+)\.txt$", f).group(1)) for f in traj_files]
+    int(re.search(r"part_(\d+)\.txt$", f).group(1))
+    for f in glob.glob(os.path.join(DATA, "part_*.txt"))
 )
 
-# read the first trajectory file to determine the number of particles
-first_traj_data = np.loadtxt(data + f"part_{timestamps[0]}.txt", skiprows=3)
-first_traj_data = np.atleast_2d(first_traj_data)  # Ensure it's a 2D array
-num_particles = first_traj_data.shape[0]
+def part(ts):
+    with open(os.path.join(DATA, f"part_{ts}.txt")) as f:
+        lines = f.readlines()
+    return float(lines[3]), np.atleast_2d(np.loadtxt(lines[5:]))
 
+npart = max(part(ts)[1].shape[0] for ts in timestamps)
 
-# Load dt from parameter file
-def get_dt_from_params(filename):
-    with open(filename, "r") as file:
-        for line in file:
-            parts = line.strip().split(":")
-            if len(parts) == 2 and parts[0].strip() == "dt":
-                return float(parts[1].strip())
-    return None
-
-
-t_unit = 60 / 60  # min TODO: why is this factor = 1?
-r_unit = 1e-04  # cm
-dt = get_dt_from_params(data + "param.txt")
-times = np.array(timestamps) * dt * t_unit
-formatted_times = [f"Time: {t:.2f}min" for t in times]
-
-# Create figure
-fig, ax = plt.subplots(figsize=(10, 8))
-
-# Pre-load concentration data
-print("Loading all concentration data...")
-concentration_data = []
-vmin, vmax = float("inf"), float("-inf")
-
+# Find concentration range once.
+vmin, vmax = np.inf, -np.inf
 for ts in timestamps:
-    conc_data = load_c_from_file(maze, data + f"conc_{ts}.txt")
-    concentration_data.append(conc_data)
-    if np.any(conc_data):
-        vmax = max(vmax, np.max(conc_data))
-        min_nonzero = np.min(conc_data[conc_data > 0])
-        vmin = min(vmin, min_nonzero)
+    f = os.path.join(DATA, f"conc_{ts}.txt")
+    if os.path.exists(f):
+        c = load_c_from_file(maze, f)
+        c = c[np.isfinite(c) & (c > 0)]
+        if c.size: vmin, vmax = min(vmin, c.min()), max(vmax, c.max())
+if not np.isfinite(vmin): vmin = 0
+if not np.isfinite(vmax) or vmax <= vmin: vmax = vmin + 1
 
-vmin = 0.0 if vmin == float("inf") else vmin
-vmax = 1.0 if vmax == float("-inf") else vmax
-norm = Normalize(vmin=vmin, vmax=vmax)
+fig, ax = plt.subplots(figsize=(10, 8))
+first = load_c_from_file(maze, os.path.join(DATA, f"conc_{timestamps[0]}.txt"))
+image = ax.imshow(first.T, origin="lower", interpolation="None",
+                  cmap="inferno", norm=Normalize(vmin, vmax),
+                  extent=[box[0, 0], box[0, 1], box[1, 0], box[1, 1]])
 
-# Initialize plot
-conc_plot = ax.imshow(
-    concentration_data[0].T,
-    interpolation="None",
-    origin="lower",
-    cmap=plt.cm.inferno,
-    alpha=1.0,
-    norm=norm,
-)
+if wall.size:
+    ax.plot(wall[:, 0]+0.5, wall[:, 1]+0.5, "s", ms=6, color="#B8C7E5")
 
-# Plot wall
-ax.plot(wall[:, 0], wall[:, 1], "s", markersize=6, color="#B8C7E5")
-
-# Annotations
-source = np.array([90.2, 10.5])
-source = np.array([42.5, 10.5])
-ax.text(
-    source[0] - 4,
-    source[1] - 2,
-    "No source",
-    color="red",
-    fontsize=15,
-    ha="right",
-    va="bottom",
-)
-ax.text(
-    source[0] + 4,
-    source[1] + 8,
-    "Exit",
-    color="k",
-    fontsize=15,
-    ha="right",
-    va="bottom",
-    backgroundcolor="white",
-)
-datetime_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-ax.text(
-    0.5, 0.99, f"Compiled: {datetime_time}", 
-    transform=ax.transAxes, 
-    fontsize=8, 
-    color='gray', 
-    ha='center', # Aligns the horizontal center of the text
-    va='top'     # Aligns the top of the text to the top boundary
-)
-
-# Green circle: radius = 20, thin line (linewidth=1 or 0.5)
-circle_green = plt.Circle(
-    (source[0], source[1]), radius=20, color="green", fill=False, linewidth=1
-)
-ax.add_patch(circle_green)
-
-# Red circle: radius = 18, thin line
-circle_red = plt.Circle((source[0], source[1]), radius=18, color='red', fill=False, linewidth=1)
-ax.add_patch(circle_red)
-
-# Lock the viewing window to the exact dimensions of the maze.
-#ax.set_xlim(0, 99)
-
-# where the Y-axis starts at 0 at the top and goes down, invert this to (110, 0).
-#ax.set_ylim(0, 110)
-
-# Rectangluar exit zones
-# zones = [(0, 35, 94, 98), (0, 4, 50, 98)]
-# # Convert grid indices to spatial coordinates and add outlines to the plot
-# for y1, y2, x1, x2 in zones:
-#     # 1. Calculate the real-world corner coordinate (lower-left)
-#     xy_corner = (x1 * 1, y1 * 1)
-# 
-#     # 2. Calculate the dimensions
-#     width = (x2 - x1) * 1
-#     height = (y2 - y1) * 1
-# 
-#     # 3. Create the rectangle patch
-#     rect = patches.Rectangle(
-#         xy_corner,
-#         width,
-#         height,
-#         linewidth=1,  # Thin outline
-#         edgecolor="r",  # Red
-#         facecolor="none",  # Transparent fill
-#         linestyle="-",  # Solid line
-#     )
-# 
-#     # 4. Add the patch to the axes
-#     ax.add_patch(rect)
-
-# Ensure the aspect ratio is equal so the circles don't look like ovals
+ax.add_patch(plt.Circle(source, radius, color="green", fill=False))
+ax.add_patch(plt.Circle(source, radius * .9, color="red", fill=False))
+ax.set(xlim=box[0], ylim=box[1])
 ax.set_aspect("equal")
+ax.set_xticks([])
+ax.set_yticks([])
 
+colors = ["red", "blue", "green", "orange", "purple", "brown", "pink",
+          "gray", "olive", "cyan", "magenta", "yellow", "black", "white",
+          "lime", "teal"]
 
-# start = np.array([5, 86])
-# ax.text(
-#     start[0],
-#     start[1],
-#     "Start",
-#     color="k",
-#     fontsize=15,
-#     ha="right",
-#     va="bottom",
-#     backgroundcolor="white",
-#     rotation="vertical",
-# )
+points = [ax.plot([], [], "o", ms=7, color=colors[p % len(colors)])[0]
+          for p in range(npart)]
 
-# Trajectory lines and current points for each particle
-colors = [
-    "red",
-    "blue",
-    "green",
-    "orange",
-    "purple",
-    "brown",
-    "pink",
-    "gray",
-    "olive",
-    "cyan",
-    "magenta",
-    "yellow",
-    "black",
-    "white",
-    "lime",
-    "teal",
-    "navy",
-    "maroon",
-    "silver",
-    "gold",
-    "indigo",
-    "violet",
-    "turquoise",
-    "salmon",
-    "khaki",
-    "plum",
-    "coral",
-    "skyblue",
-    "darkgreen",
-    "darkred",
-    "darkblue",
-    "darkorange",
-]
-trajectory_lines = []
-current_points = []
-for p in range(num_particles):
-    (line,) = ax.plot(
-        [], [], "-", linewidth=3.0, alpha=1.0, color=colors[p % len(colors)]
-    )
-    trajectory_lines.append(line)
-    (point,) = ax.plot([], [], "o", markersize=7, color=colors[p % len(colors)])
-    current_points.append(point)
+if SHOW_TRAJECTORIES:
+    trails = [ax.plot([], [], "-", lw=2, alpha=.7,
+                      color=colors[p % len(colors)])[0]
+              for p in range(npart)]
+    trail = np.full((npart, len(timestamps), 2), np.nan)
 
-# Timestamp text
-timestamp_text = ax.text(
-    0.02,
-    0.98,
-    "",
-    transform=ax.transAxes,
-    color="white",
-    fontsize=20,
-    verticalalignment="top",
-)
-
-# Remove ticks
-plt.xticks([])
-plt.yticks([])
+time_text = ax.text(.02, .98, "", transform=ax.transAxes,
+                    color="white", fontsize=20, va="top")
 fig.tight_layout()
 
-# Pre-load trajectory data
-print("Loading and preprocessing all trajectory data...")
-# Determine num_particles from first file
-first_traj_data = np.loadtxt(data + f"part_{timestamps[0]}.txt", skiprows=3)
-first_traj_data = np.atleast_2d(first_traj_data)
-num_particles = first_traj_data.shape[0]
+def update(i):
+    ts = timestamps[i]
+    time, traj = part(ts)
+    f = os.path.join(DATA, f"conc_{ts}.txt")
 
-all_x_points = [[] for _ in range(num_particles)]
-all_y_points = [[] for _ in range(num_particles)]
-trajectory_indices = {}
+    if os.path.exists(f):
+        image.set_array(load_c_from_file(maze, f).T)
 
-for ts in timestamps:
-    traj_data = np.loadtxt(data + f"part_{ts}.txt", skiprows=3)
-    traj_data = np.atleast_2d(traj_data)
+    for p in range(npart):
+        if p < len(traj):
+            x, y = traj[p, 1:3]
+            points[p].set_data([x], [y])
+            if SHOW_TRAJECTORIES:
+                trail[p, i] = x, y
+        else:
+            points[p].set_data([], [])
 
-    for p in range(num_particles):
-        all_x_points[p].append(traj_data[p, 1])
-        all_y_points[p].append(traj_data[p, 2])
+        if SHOW_TRAJECTORIES:
+            trails[p].set_data(trail[p, :i + 1, 0],
+                               trail[p, :i + 1, 1])
 
-    trajectory_indices[ts] = len(
-        all_x_points[0]
-    )  # All particles have the same number of points
+    time_text.set_text(f"Time: {time:.3f}s")
+    return [image, *points, time_text, *trails] if SHOW_TRAJECTORIES else \
+           [image, *points, time_text]
 
-# Convert to numpy arrays
-for p in range(num_particles):
-    all_x_points[p] = np.array(all_x_points[p], dtype=np.float32)
-    all_y_points[p] = np.array(all_y_points[p], dtype=np.float32)
+ani = animation.FuncAnimation(fig, update, frames=len(timestamps),
+                              interval=100, blit=True)
 
+writer = animation.FFMpegWriter(
+    fps=40, bitrate=2000, codec="libx264",
+    extra_args=["-crf", "17", "-threads", "16", "-preset", "ultrafast"])
 
-# Update function
-def update(frame):
-    timestamp = timestamps[frame]
-    conc_plot.set_array(concentration_data[frame].T)
-    end_idx = trajectory_indices[timestamp]
-    for p in range(num_particles):
-        trajectory_lines[p].set_data(
-            all_x_points[p][:end_idx], all_y_points[p][:end_idx]
-        )
-        if end_idx > 0:
-            current_points[p].set_data(
-                [all_x_points[p][end_idx - 1]], [all_y_points[p][end_idx - 1]]
-            )
-    timestamp_text.set_text(formatted_times[frame])
-    return [conc_plot] + trajectory_lines + current_points
-
-
-# Create animation
-ani = animation.FuncAnimation(
-    fig, update, frames=len(timestamps), interval=100, blit=True
-)
-
-# Save animation
-print("Saving animation...")
-Writer = animation.writers["ffmpeg"]
-writer = Writer(
-    fps=40,
-    bitrate=2000,
-    codec="libx264",
-    extra_args=[
-        "-crf",
-        "17",
-        "-threads",
-        "16",
-        "-preset",
-        "ultrafast",
-        "-tune",
-        "film",
-    ],
-)
-ani.save(data + "particle_trajectory.mp4", writer=writer)
-shutil.copy(data + "particle_trajectory.mp4", "particle_trajectory.mp4")
-print("Animation saved successfully.")
+out = os.path.join(DATA, "particle_trajectory.mp4")
+ani.save(out, writer=writer)
+shutil.copy(out, "particle_trajectory.mp4")

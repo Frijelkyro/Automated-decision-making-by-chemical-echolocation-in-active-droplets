@@ -4,28 +4,28 @@ import ast
 import numpy as np
 from list_of_functions import get_param_filename
 
-def _read_parameter_file(data,param_filename):
-    
-    """
-    Read the simple 'key: value' parameter file produced by write_parameters().
-    """
+def _read_parameter_file(filename):
     parameters = {}
+    with open(filename) as f:
+        lines = f.readlines()
 
-    with open(data+"/"+param_filename, "r") as f:
-        for line in f:
-            line = line.strip()
+    i = 0
+    while i < len(lines):
+        if ":" not in lines[i]:
+            i += 1
+            continue
 
-            if not line or ":" not in line:
-                continue
+        key, value = lines[i].split(":", 1)
+        value = value.strip()
+        while value.count("[") > value.count("]"):
+            i += 1
+            value += " " + lines[i].strip()
 
-            key, value = line.split(":", 1)
-            key = key.strip()
-            value = value.strip()
-
-            try:
-                parameters[key] = ast.literal_eval(value)
-            except (ValueError, SyntaxError):
-                parameters[key] = value
+        try:
+            parameters[key.strip()] = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            parameters[key.strip()] = value
+        i += 1
 
     return parameters
 
@@ -107,60 +107,31 @@ def _read_particles(filename, num_particles, n_steps):
     return p, theta, v, omega
 
 
-def resume_simulation_from_file(
-    data,
-    param_filename,
-    maze,
-    n_steps
-):
-    """
-    Resume a simulation from the current param.txt file.
-    """
-    # 1. Load params from the param.txt
+def resume_simulation_from_file(data, param_filename, maze, n_steps):
     print(f"Using parameter file: {param_filename}")
-    old_parameters = _read_parameter_file(data, param_filename)
-    old_dt = float(old_parameters["dt"])
+    old = _read_parameter_file(param_filename)
 
-    dead_tracker = np.array(old_parameters["dead_tracker"], dtype=bool)
-    active_mask = np.array(old_parameters["active_mask"], dtype=bool)
-    birth_times = np.array(old_parameters["birth_times"], dtype=float)
-    file_prefix_conc = str(old_parameters["file_prefix_conc"])
-    file_prefix_part = str(old_parameters["file_prefix_part"])
-    num_particles = int(old_parameters["num_particles"])
-    exit_trigger_time = np.array(old_parameters["exit_trigger_time"], dtype=float)
+    old_dt = float(old["dt"])
+    num_particles = int(old["num_particles"])
+    resume_step = int(old["resume_step"])
+    resume_time = float(old["simulation_time"])
+    dead_tracker = np.array([x == "True" for x in old["dead_tracker"].strip("[]").split()], dtype=bool)
+    active_mask = np.array([x == "True" for x in old["active_mask"].strip("[]").split()], dtype=bool)    
+    birth_times = np.fromstring(old["birth_times"].strip("[]").replace("\n", " "), sep=" ")
+    exit_trigger_time = np.fromstring(old["exit_trigger_time"].strip("[]").replace("\n", " "), sep=" ")
 
-    resume_step = int(old_parameters["resume_step"])
-    # remove all simulation written files that were created on or after the resume step:
+    file_prefix_conc = str(old["file_prefix_conc"])
+    file_prefix_part = str(old["file_prefix_part"])
+
     for prefix in ("conc", "part"):
-        for filename in os.listdir(data):
-            match = re.fullmatch(rf"{prefix}_(\d+)\.txt", filename)
-            if match and int(match.group(1)) >= resume_step:
-                os.remove(os.path.join(data, filename))
+        for f in os.listdir(data):
+            m = re.fullmatch(rf"{prefix}_(\d+)\.txt", f)
+            if m and int(m.group(1)) > resume_step:
+                os.remove(os.path.join(data, f))
 
-    resume_time = float(old_parameters["simulation_time"])
-
-    conc = _read_concentration(
-        file_prefix_conc,
-        maze,
-        n_steps,
-    )
+    conc = _read_concentration(f"{file_prefix_conc}_{resume_step}.txt", maze, n_steps)
     p, theta, v, omega = _read_particles(
-        file_prefix_part,
-        num_particles,
-        n_steps,
+        f"{file_prefix_part}_{resume_step}.txt", num_particles, n_steps
     )
 
-    return (
-        conc,
-        p,
-        theta,
-        v,
-        omega,
-        active_mask,
-        dead_tracker,
-        exit_trigger_time,
-        birth_times,
-        resume_step,
-        resume_time,
-        old_dt,
-    )
+    return conc, p, theta, v, omega, active_mask, dead_tracker, exit_trigger_time, birth_times, resume_step, resume_time, old_dt

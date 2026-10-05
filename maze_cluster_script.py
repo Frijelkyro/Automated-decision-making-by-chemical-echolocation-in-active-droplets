@@ -47,25 +47,27 @@ Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
 n_steps = 5000  # number of time steps 40000
-dt = 0.9 * 10 ** (-3)  # time step size
+dt = 0.09 * 10 ** (-3)  # time step size
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
 time_loop = 100  # number of time loops
 
 # global_step = 0      # integer, mainly for output filenames
 # local_step = 0       # integer, position within the current solver call
 # buffer_index = 0     # index into p/v/theta/c rolling arrays
-simulation_time = 0.0  # physical time in seconds (will be overweritten if resume_simulation)
+simulation_time = (
+    0.0  # physical time in seconds (will be overweritten if resume_simulation)
+)
 
-#start_time = 0.0
-#start_step = 0
+# start_time = 0.0
+# start_step = 0
 
 time = np.arange(0, time_loop * n_steps, 1) * dt
 time = time[np.newaxis, :]
 
 write_every = 100  # write output after every this many time steps
 
-num_particles = 350 # Number of particles
-emission_rate = 3.5 # droplets per second
+num_particles = 350  # Number of particles
+emission_rate = 3.5  # droplets per second
 emitter_position = np.array([4.1, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
@@ -88,18 +90,19 @@ file_prefix_part = data + "/part"
 
 # maze = maze_from_file('different_mazes/empty_box.tsv')
 maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet.tsv")
-if test_run: maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv")
+if test_run:
+    maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv")
 # maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
 wall = np.transpose(np.where(maze == 0))
 
 exit_radius = 20.0  # radius of the exit around the target (static source)
-grim_reaper_delay = 8.51
+grim_reaper_delay = 0.1
 exit_wall_radius = 20.0  # radius for the leaky exit wall (this also removes particles when they get <2 pixels close)
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 if test_run:
     # num_particles = int(num_particles * 0.1 // 1)
-    n_steps = int(n_steps * 0.1 // 1)  # preferably 600
+    n_steps = int(n_steps * 0.01 // 1)  # preferably 600
     # time_loop = int(time_loop * 0.1 // 1)  # preferably 10
     write_every = 100
     static_source_position = (42.5, 10.5)  # Position of the static source
@@ -177,19 +180,18 @@ if not drops_added_incremental:
                 f"Could not fit particle {particle_id}. Increase initial_spread or decrease min_separation."
             )
 
-        p[particle_id, 0] = candidate # type: ignore
-        placed_positions = np.vstack([placed_positions, candidate]) # type: ignore
+        p[particle_id, 0] = candidate  # type: ignore
+        placed_positions = np.vstack([placed_positions, candidate])  # type: ignore
     birth_times = np.array([0 for i in range(num_particles)], dtype=int)
     active_mask[:] = True
 
 # Resume settings
-resume_simulation = False
+resume_simulation = True
 
 resume_step = 0  # this will be read from the last sim
 resume_old_dt = np.inf  # 0.0001 this will be read from the last sim
 resume_new_dt = dt
 full_traj = np.empty((num_particles, 0, 15), dtype=np.float32)
-exit_trigger_time  = np.full(num_particles, np.inf)
 
 if resume_simulation:
     (
@@ -205,19 +207,14 @@ if resume_simulation:
         resume_step,
         simulation_time,
         resume_old_dt,
-    ) = resume_simulation_from_file(
-        data,
-        param_filename,
-        maze,
-        n_steps
-    )
+    ) = resume_simulation_from_file(data, param_filename+".bak", maze, n_steps)
 
     print(
         f"Resuming from timestep {resume_step} "
         f"(t = {simulation_time:.6f} s, old dt = {resume_old_dt})"
     )
 
-    
+
 # build a parameter dictionary
 parameter_dict = {
     "Dc": Dc,
@@ -301,15 +298,14 @@ for i in pbar:
         v,
         omega,
         maze,
-        exit_trigger_time,
         start_step=resume_step + i * n_steps,
         start_time=simulation_time,
         **parameter_dict,
     )
 
-    write_param_snapshot(parameter_dict, simulation_time, resume_step+i*n_steps)
+    write_param_snapshot(parameter_dict, simulation_time, resume_step + i * n_steps)
 
-    simulation_time += n_steps * dt
+    simulation_time += (n_steps - 1) * dt
 
     if exit:
         # current_time = np.repeat(
@@ -417,14 +413,12 @@ if not os.path.isfile(filename2):
 with open(filename2, "a") as f:
     for particle_id in range(num_particles):
         if not np.isfinite(exit_trigger_time[particle_id]):
-            f.write(
-                f"{-1} {beta} {job_id} {particle_id}\n"
-            )   
+            f.write(f"{-1} {beta} {job_id} {particle_id}\n")
         else:
             f.write(
                 f"{max((exit_trigger_time [particle_id]-birth_times[particle_id]), -1)} {beta} {job_id} {particle_id}\n"
             )
-        
+
 
 sim_duration_perf_metric = perf_counter() - simulation_t0
 
@@ -434,4 +428,6 @@ with open(param_filename, "a") as f:  # type: ignore
     f.write(f"init_duration_perf_metric: {init_duration_perf_metric:.3f} s\n")
     f.write(f"sim_duration_perf_metric: {sim_duration_perf_metric:.3f} s\n")
 
-print(f"This simulation duration (performance metric): {sim_duration_perf_metric:.3f} s")
+print(
+    f"This simulation duration (performance metric): {sim_duration_perf_metric:.3f} s"
+)

@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 
 import numpy as np
 from maze_functions import get_exit_wall_mask, leaky_exit_wall
@@ -48,6 +49,7 @@ def moving_point_source(
 ):
     t = local_step % n_steps
     for particle_id in range(particle_positions.shape[0]):
+        print(particle_positions)
         x_bin = int(np.rint(particle_positions[particle_id, 0] / dx))
         y_bin = int(np.rint(particle_positions[particle_id, 1] / dx))
         s[t, x_bin, y_bin] += (production_strength / (dx**2)) * np.exp(
@@ -360,6 +362,7 @@ def write_parameters(**parameters):
 
 def write_param_snapshot(parameters, simulation_time, resume_step):
     param_filename = parameters.get("param_filename", "parameters.txt")
+    shutil.copy2(param_filename, param_filename+".bak") if os.path.exists(param_filename) else None    
     with open(param_filename, "w") as f:
         for key, value in parameters.items():
             f.write(f"{key}: {value}\n")
@@ -460,7 +463,6 @@ def chemical_solver(
     velocity,
     ang_velocity,
     maze,
-    exit_trigger_time,
     start_step=0,
     start_time=0.0,
     **kwargs,
@@ -577,13 +579,13 @@ def chemical_solver(
     px_bins = np.zeros(num_particles, dtype=int)
     py_bins = np.zeros(num_particles, dtype=int)
 
-    for local_step in range(nt):
+    for local_step in range(nt-1):  # this iterates from 0 to 48
 
         timestep = start_step + local_step
         simulation_time = start_time + local_step * dt
 
         t = local_step
-        t_next = local_step + 1
+        t_next = local_step + 1  # goes from 1 to 49
         
         if drops_added_incremental:
             min_clearance = 1.5 * dx
@@ -625,6 +627,7 @@ def chemical_solver(
         E = c[t, 1:-1, 1:-1]  # c[k, i, j]
 
         particle_positions = position[:, t, :]
+        print(active_mask)
         source = moving_point_source(
             source,
             moving_source_production_strength,
