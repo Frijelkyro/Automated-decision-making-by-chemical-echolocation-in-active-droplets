@@ -187,6 +187,7 @@ if not drops_added_incremental:
 
 # Resume settings
 resume_simulation = True
+resume_simulation = False
 
 resume_step = 0  # this will be read from the last sim
 resume_old_dt = np.inf  # 0.0001 this will be read from the last sim

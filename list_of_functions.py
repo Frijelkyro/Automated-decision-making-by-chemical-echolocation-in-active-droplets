@@ -49,7 +49,6 @@ def moving_point_source(
 ):
     t = local_step % n_steps
     for particle_id in range(particle_positions.shape[0]):
-        print(particle_positions)
         x_bin = int(np.rint(particle_positions[particle_id, 0] / dx))
         y_bin = int(np.rint(particle_positions[particle_id, 1] / dx))
         s[t, x_bin, y_bin] += (production_strength / (dx**2)) * np.exp(
@@ -318,17 +317,14 @@ def self_propulsion_force(
     active_indices = np.where(active_mask)[0]
 
     forces[active_indices, 0] = (
-        self_propulsion_speed
-        * np.cos(theta[active_indices, t])
-        * decay
+        self_propulsion_speed * np.cos(theta[active_indices, t]) * decay
     )
     forces[active_indices, 1] = (
-        self_propulsion_speed
-        * np.sin(theta[active_indices, t])
-        * decay
+        self_propulsion_speed * np.sin(theta[active_indices, t]) * decay
     )
 
     return forces
+
 
 def write_parameters(**parameters):
     param_filename = parameters.get("param_filename", "parameters.txt")
@@ -353,25 +349,31 @@ def write_parameters(**parameters):
         directory or ".",
         f"param{next_number:02d}.txt",
     )
-
+    print(numbered_filename)
     with open(numbered_filename, "w") as param_file:
         for key, value in parameters.items():
             param_file.write(f"{key}: {value}\n")
 
     return numbered_filename
 
+
 def write_param_snapshot(parameters, simulation_time, resume_step):
     param_filename = parameters.get("param_filename", "parameters.txt")
-    shutil.copy2(param_filename, param_filename+".bak") if os.path.exists(param_filename) else None    
+    (
+        shutil.copy2(param_filename, param_filename + ".bak")
+        if os.path.exists(param_filename)
+        else None
+    )
     with open(param_filename, "w") as f:
         for key, value in parameters.items():
             f.write(f"{key}: {value}\n")
         f.write(f"simulation_time:{simulation_time}\n")
         f.write(f"resume_step:{resume_step}\n")
 
+
 def get_param_filename(data):
     param_files = []
-    
+
     for filename in os.listdir(data):
         match = re.fullmatch(r"param(\d+)\.txt", filename)
         if match:
@@ -386,12 +388,13 @@ def get_param_filename(data):
     filename = str(filename)
     return filename
 
+
 # Load dt from the parameter file with the highest integer suffix
 def get_dt_from_params(data):
 
-    filename=get_param_filename(data)
+    filename = get_param_filename(data)
 
-    with open(data+"/"+filename, "r") as file:
+    with open(data + "/" + filename, "r") as file:
         for line in file:
             parts = line.strip().split(":")
             if len(parts) == 2 and parts[0].strip() == "dt":
@@ -577,20 +580,18 @@ def chemical_solver(
     px_bins = np.zeros(num_particles, dtype=int)
     py_bins = np.zeros(num_particles, dtype=int)
 
-    for local_step in range(nt-1):  # this iterates from 0 to 48
+    for local_step in range(nt - 1):  # this iterates from 0 to 48
 
         timestep = start_step + local_step
         simulation_time = start_time + local_step * dt
 
         t = local_step
         t_next = local_step + 1  # goes from 1 to 49
-        
+
         if drops_added_incremental:
             min_clearance = 1.5 * dx
             spawning_queue = np.where(
-                (birth_times <= simulation_time)
-                & (~active_mask)
-                & (~dead_tracker)
+                (birth_times <= simulation_time) & (~active_mask) & (~dead_tracker)
             )[0]
 
             if len(spawning_queue) > 0:
@@ -625,7 +626,6 @@ def chemical_solver(
         E = c[t, 1:-1, 1:-1]  # c[k, i, j]
 
         particle_positions = position[:, t, :]
-        print(active_mask)
         source = moving_point_source(
             source,
             moving_source_production_strength,
@@ -800,14 +800,17 @@ def chemical_solver(
             ) / dt
 
         if np.any(active_mask):
-            px_bins[active_mask] = np.rint(position[active_mask, t + 1, 0] / dx).astype(int)
-            py_bins[active_mask] = np.rint(position[active_mask, t + 1, 1] / dx).astype(int)
+            px_bins[active_mask] = np.rint(position[active_mask, t + 1, 0] / dx).astype(
+                int
+            )
+            py_bins[active_mask] = np.rint(position[active_mask, t + 1, 1] / dx).astype(
+                int
+            )
 
             # # Clip indices safely within maze boundaries
             # px_bins[active_mask] = np.clip(px_bins[active_mask], 0, maze.shape[0] - 1)
             # py_bins[active_mask] = np.clip(py_bins[active_mask], 0, maze.shape[1] - 1)
 
-        
         ## out_of_bounds_check()
 
         # ---------------------------------------------------------
@@ -818,12 +821,8 @@ def chemical_solver(
         particle_positions_now = position[active_mask, t + 1, :]
 
         if particle_positions_now.size > 0:
-            particle_bins_x = np.rint(
-                particle_positions_now[:, 0] / dx
-            ).astype(int)
-            particle_bins_y = np.rint(
-                particle_positions_now[:, 1] / dx
-            ).astype(int)
+            particle_bins_x = np.rint(particle_positions_now[:, 0] / dx).astype(int)
+            particle_bins_y = np.rint(particle_positions_now[:, 1] / dx).astype(int)
 
             unsafe = (
                 (particle_bins_x < 1)
