@@ -1,25 +1,43 @@
-import re
+#!/usr/bin/env python3
+
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-with open("data/param.txt.bak") as f:
-    s = f.read()
+ER, REAPER_TIMER, BIN_WIDTH = 0.5, 6.0, 5.0
+STATS_DIR = Path(f"./output/exit_time_statistics/{ER}_emission_rate/{REAPER_TIMER}")
+files = sorted(STATS_DIR.glob("shot_*.npz"))
+if not files:
+    raise FileNotFoundError(f"No shot files found in {STATS_DIR}")
 
-def get_array(name):
-    m = re.search(rf"{name}:\s*\[(.*?)\]", s, re.S)
-    return np.fromstring(m.group(1), sep=" ")
+birth, duration = [], []
 
-birth = get_array("birth_times")
-exit_time = get_array("exit_trigger_time")
+for f in files:
+    with np.load(f) as d:
+        b, e = d["birth_times"].astype(float), d["exit_trigger_time"].astype(float)
+    valid = np.isfinite(b) & np.isfinite(e)
+    birth.extend(b[valid])
+    duration.extend((e[valid] - b[valid]))
 
-delay = exit_time - birth
-mask = np.isfinite(delay)
+birth, duration = np.asarray(birth), np.asarray(duration)
 
-plt.figure(figsize=(9, 4))
-plt.plot(birth[mask], delay[mask], ".", ms=4)
-plt.xlabel("Birth time")
-plt.ylabel("Exit trigger time − birth time")
-plt.title("Particle exit delay")
-plt.grid(alpha=0.3)
+bins = np.arange(0, birth.max() + BIN_WIDTH, BIN_WIDTH)
+idx = np.digitize(birth, bins) - 1
+
+x, mean, std = [], [], []
+for i in range(len(bins) - 1):
+    v = duration[idx == i]
+    if v.size:
+        x.append((bins[i] + bins[i + 1]) / 2)
+        mean.append(v.mean())
+        std.append(v.std(ddof=1) if v.size > 1 else 0)
+
+plt.errorbar(x, mean, yerr=std, fmt="o-", capsize=3)
+plt.xlabel("Birth time [s]")
+plt.ylabel("Exit time − birth time [s]")
+plt.title(f"Exit time vs birth time ({BIN_WIDTH:g} s bins)")
+plt.grid(alpha=.3)
 plt.tight_layout()
+plt.savefig(STATS_DIR / "exit_time_vs_birth_time.png", dpi=300)
 plt.show()
+

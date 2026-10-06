@@ -2,7 +2,7 @@ archive/*
 data/*
 data
 output/*
-output
+output*
 particle_trajectory.mp4
 .python-version
 evaluation-scripts/*
