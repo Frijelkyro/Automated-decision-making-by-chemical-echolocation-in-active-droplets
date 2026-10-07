@@ -4,20 +4,28 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-ER, REAPER_TIMER, BIN_WIDTH = 0.5, 6.0, 5.0
-STATS_DIR = Path(f"./output/exit_time_statistics/{ER}_emission_rate/{REAPER_TIMER}")
+ER, REAPER_TIMER, BIN_WIDTH = 0.5, 6.0, 1.0
+STATS_DIR = Path(f"./output/exit_time_statistics/{ER}_emission_rate/{REAPER_TIMER}_2")
 files = sorted(STATS_DIR.glob("shot_*.npz"))
 if not files:
     raise FileNotFoundError(f"No shot files found in {STATS_DIR}")
 
 birth, duration = [], []
 
+i = 0
 for f in files:
     with np.load(f) as d:
         b, e = d["birth_times"].astype(float), d["exit_trigger_time"].astype(float)
     valid = np.isfinite(b) & np.isfinite(e)
     birth.extend(b[valid])
     duration.extend((e[valid] - b[valid]))
+    # print(f.relative_to(f"./output/exit_time_statistics/{ER}_emission_rate/{REAPER_TIMER}_2"))
+    if i == 3:
+        print(b)
+        print(e)
+        print(np.array(birth, dtype=float))
+        # print(list(duration))
+    i += 1
 
 birth, duration = np.asarray(birth), np.asarray(duration)
 
