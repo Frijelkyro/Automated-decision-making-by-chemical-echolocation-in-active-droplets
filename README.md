@@ -67,6 +67,33 @@ By default the example driver writes outputs into `data/` (see `maze_cluster_scr
 - `data/part_*.txt` — particle snapshots
 - `data/particle_trajectory.mp4` — rendered video (created by `video_maker.py`)
 
+### Experiment series
+
+The single-run wrapper accepts parameter and directory overrides, so it can also be run without GNU Parallel:
+
+```bash
+python maze_cluster_script.py --beta -8 --emission-rate 0.5 --dt 0.0005 \
+	--grim-reaper-delay 6 --desired-time 800 --write-every 100 --n-steps 100 \
+	--test-run false --resume false --run-id beta_m8_e05 --shot 0 \
+	--data-dir data/beta_m8_e05/shot_000 \
+	--output-dir output/beta_m8_e05/shot_000
+```
+
+Experiment defaults and parameter grids live in `experiments/simulation_series_parameters.toml`. Generate its command list with:
+
+```bash
+python scripts/make_jobs.py
+```
+
+If GNU Parallel is installed, launch the generated list with three concurrent jobs, or pass `--resume` to resume from its existing job log:
+
+```bash
+python scripts/run_parallel.py --jobs 3
+python scripts/run_parallel.py --jobs 3 --resume
+```
+
+Each shot has its own data and output directories. The sample grids currently generate 409 shots: the coarse regime has 3 beta values × 3 emission rates (9 configurations), and the interesting regime has 2 configurations × 200 shots.
+
 
 
 ## Configuration and parameters

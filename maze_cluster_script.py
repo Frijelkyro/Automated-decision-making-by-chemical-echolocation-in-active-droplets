@@ -2,6 +2,7 @@
 # %autoreload 2
 
 import matplotlib.pyplot as plt
+import argparse
 import os
 import sys
 import numpy as np
@@ -12,12 +13,41 @@ from list_of_functions import *
 from time import perf_counter
 from tqdm import tqdm
 
+
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    normalized = value.lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
+
+
+parser = argparse.ArgumentParser(description="Run one maze simulation shot.")
+parser.add_argument("--dt", type=float, default=0.0005)
+parser.add_argument("--beta", type=float, default=-8)
+parser.add_argument("--emission-rate", type=float, default=0.5)
+parser.add_argument("--grim-reaper-delay", type=float, default=6.0)
+parser.add_argument("--desired-time", type=float, default=80)
+parser.add_argument("--write-every", type=int, default=100)
+parser.add_argument("--n-steps", type=int, default=100)
+parser.add_argument("--num-particles", type=int, default=60)
+parser.add_argument("--test-run", type=parse_bool, default=False)
+parser.add_argument("--resume", type=parse_bool, default=False)
+parser.add_argument("--run-id", default="default")
+parser.add_argument("--shot", type=int, default=0)
+parser.add_argument("--data-dir", default="data")
+parser.add_argument("--output-dir")
+args = parser.parse_args()
+
 # This script is used to run the chemical solver on a maze with one particle.
 # It initializes the parameters, generates a maze, and runs the simulation.
 
 
 init_t0 = perf_counter()  # time tracking
-beta = -8
+beta = args.beta
 
 Dc = 2.0 * 10 ** (2)  # diffusion coefficient of the chemical (100)
 Dp = 1.0 * 10 ** (0)  # noise strength for the particle (0.1)
@@ -46,10 +76,10 @@ Lx = 100.0  # domain size
 Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
-n_steps = 100  # number of time steps 40000
+n_steps = args.n_steps  # number of time steps 40000
 time_loop = 2250  # number of time loops
-dt = .50000000000000000000 * 10 ** (-3) # time step size
-desired_time = 80
+dt = args.dt  # time step size
+desired_time = args.desired_time
 if desired_time:
     time_loop = int(np.ceil(desired_time / n_steps / dt))
 gamma = (Dc * dt) / (dx**2)  # gamma parameter
@@ -58,25 +88,30 @@ gamma = (Dc * dt) / (dx**2)  # gamma parameter
 simulation_time = 0.0  # physical time to start with TODO in seconds?
 # start_step = 0
 
-write_every = 100  # write output after every this many time steps
+write_every = args.write_every  # write output after every this many time steps
 
-num_particles = 60 # Number of particles
-emission_rate = 0.5 # droplets per second
+num_particles = args.num_particles  # Number of particles
+emission_rate = args.emission_rate  # droplets per second
+if desired_time:
+    num_particles = int(np.ceil(emission_rate * desired_time))
 emitter_position = np.array([2.1, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
-test_run = False
+test_run = args.test_run
 
 # Data directory
-data = "data"  # for linux
+data = args.data_dir
+output_dir = args.output_dir or data
+os.makedirs(data, exist_ok=True)
+os.makedirs(output_dir, exist_ok=True)
 # data = 'D:\maze_data' # for windows
 # Check if data directory exists, if not, create it
 if not os.path.exists(data):
     os.makedirs(data)
-param_filename = data + "/param.txt"
-grid_filename = data + "/grid.txt"
-file_prefix_conc = data + "/conc"
-file_prefix_part = data + "/part"
+param_filename = os.path.join(data, "param.txt")
+grid_filename = os.path.join(data, "grid.txt")
+file_prefix_conc = os.path.join(data, "conc")
+file_prefix_part = os.path.join(data, "part")
 
 
 # Generate a maze
@@ -90,7 +125,7 @@ if test_run:
 wall = np.transpose(np.where(maze == 0))
 
 exit_radius = 20.0  # radius of the exit around the target (static source)
-grim_reaper_delay = 6.0
+grim_reaper_delay = args.grim_reaper_delay
 exit_wall_radius = 20.0  # radius for the leaky exit wall (this also removes particles when they get <2 pixels close)
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 
@@ -112,7 +147,7 @@ exit_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius / dx) ** 2
 death_zone_map = ((X - cx) ** 2 + (Y - cy) ** 2) <= (exit_radius * 0.9 / dx) ** 2
 
 birth_cx, birth_cy = np.rint(emitter_position / dx).astype(int)
-min_clearance = 1.5 * dx
+min_clearance = 3 * dx
 birth_zone_map = ((X - birth_cx) ** 2 + (Y - birth_cy) ** 2) <= (
     min_clearance / dx
 ) ** 2
@@ -186,8 +221,7 @@ if not drops_added_incremental:
     active_mask[:] = True
 
 # Resume settings
-resume_simulation = True
-# resume_simulation = False
+resume_simulation = args.resume
 
 resume_step = 0  # this will be read from the last sim
 resume_old_dt = np.inf  # 0.0001 this will be read from the last sim
@@ -271,6 +305,8 @@ parameter_dict = {
     "exit_wall_mask": exit_wall_mask,
     "permeability": permeability,
     "drops_added_incremental": drops_added_incremental,
+    "run_id": args.run_id,
+    "shot": args.shot,
 }
 
 # --------------- time tracking ---------------------
@@ -396,7 +432,7 @@ column_names = [
 
 
 # Get the job ID from the command line arguments
-job_id = 1  # sys.argv[1]
+job_id = args.shot
 
 # Create the filename using the job ID
 # filename1 = data + f"/full_traj_{job_id}.txt"
@@ -412,15 +448,10 @@ job_id = 1  # sys.argv[1]
 #     )
 #
 
-filename2 = data + "/exit_times.txt"
-# Check if the file exists
-if not os.path.isfile(filename2):
-    # If the file doesn't exist, write the header
-    with open(filename2, "w") as f:
-        f.write("ExitTime Beta JobID ParticleID\n")
+filename2 = os.path.join(output_dir, "exit_times.txt")
 
-# Append the data to the file
-with open(filename2, "a") as f:
+with open(filename2, "w") as f:
+    f.write("ExitTime Beta JobID ParticleID\n")
     for particle_id in range(num_particles):
         if not np.isfinite(exit_trigger_time[particle_id]):
             f.write(f"{-1} {beta} {job_id} {particle_id}\n")

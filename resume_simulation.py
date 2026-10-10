@@ -52,9 +52,9 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
     param_filename = param_filename.removesuffix(".txt") + "_checkpoint.txt"
 
     if not os.path.exists(param_filename):
-        param_filename = "data/param.txt.bak"
+        raise FileNotFoundError(f"Checkpoint parameters not found: {param_filename}")
     if not os.path.exists(state_filename):
-        state_filename = "data/param_state.npz.bak"
+        raise FileNotFoundError(f"Checkpoint state not found: {state_filename}")
     print(f"Using recovery parameter file: {param_filename}")
 
     old = _read_parameter_file(param_filename)
