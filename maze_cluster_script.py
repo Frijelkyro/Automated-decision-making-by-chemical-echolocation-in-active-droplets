@@ -229,32 +229,43 @@ resume_new_dt = dt
 full_traj = np.empty((num_particles, 0, 15), dtype=np.float32)
 
 if resume_simulation:
-    (
-        conc,
-        p,
-        theta,
-        v,
-        omega,
-        active_mask,
-        dead_tracker,
-        exit_trigger_time,
-        birth_times,
-        resume_step,
-        simulation_time,
-        resume_old_dt,
-    ) = resume_simulation_from_file(
-        data,
-        param_filename,
-        maze,
-        n_steps,
-    )
+    checkpoint_param = param_filename.removesuffix(".txt") + "_checkpoint.txt"
+    checkpoint_state = param_filename.removesuffix(".txt") + "_state_checkpoint.npz"
+    checkpoint_exists = (os.path.exists(checkpoint_param), os.path.exists(checkpoint_state))
 
-    print(
-        f"Resuming from timestep {resume_step} "
-        f"(t: {simulation_time:.6f} s, old dt: {resume_old_dt}, new dt: {dt})"
-    )
-    if desired_time:
-        time_loop = int(np.ceil((desired_time - simulation_time) / n_steps / dt))
+    if all(checkpoint_exists):
+        (
+            conc,
+            p,
+            theta,
+            v,
+            omega,
+            active_mask,
+            dead_tracker,
+            exit_trigger_time,
+            birth_times,
+            resume_step,
+            simulation_time,
+            resume_old_dt,
+        ) = resume_simulation_from_file(
+            data,
+            param_filename,
+            maze,
+            n_steps,
+        )
+
+        print(
+            f"Resuming from timestep {resume_step} "
+            f"(t: {simulation_time:.6f} s, old dt: {resume_old_dt}, new dt: {dt})"
+        )
+        if desired_time:
+            time_loop = int(np.ceil((desired_time - simulation_time) / n_steps / dt))
+    elif any(checkpoint_exists):
+        raise FileNotFoundError(
+            f"Incomplete checkpoint for {data}: expected both checkpoint files"
+        )
+    else:
+        print(f"No checkpoint found in {data}; starting this shot from scratch.")
 
 
 # build a parameter dictionary

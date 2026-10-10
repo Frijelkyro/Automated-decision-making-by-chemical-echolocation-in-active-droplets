@@ -85,14 +85,13 @@ Experiment defaults and parameter grids live in `experiments/simulation_series_p
 python scripts/make_jobs.py
 ```
 
-If GNU Parallel is installed, launch the generated list with three concurrent jobs, or pass `--resume` to resume from its existing job log:
+If GNU Parallel is installed, launch the generated list with three concurrent jobs:
 
 ```bash
 python scripts/run_parallel.py --jobs 3
-python scripts/run_parallel.py --jobs 3 --resume
 ```
 
-Each shot has its own data and output directories. The sample grids currently generate 409 shots: the coarse regime has 3 beta values × 3 emission rates (9 configurations), and the interesting regime has 2 configurations × 200 shots.
+When `resume_simulation = true`, rerunning a series with the same name resumes its GNU Parallel job log and each unfinished shot from its latest checkpoint. Keep its configuration unchanged when resuming; use a new series name for changed parameters. Shots without a checkpoint start fresh. Each series has isolated data and output directories. The configured `emission_1_reaper_6_400s` series runs 200 shots.
 
 
 

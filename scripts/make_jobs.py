@@ -56,8 +56,8 @@ def generate_jobs(config_path):
             run_id = f"{regime['name']}_c{config_index:04d}"
             for shot in range(regime["shots"]):
                 shot_name = f"shot_{shot:03d}"
-                data_dir = data_root / run_id / shot_name
-                output_dir = output_root / run_id / shot_name
+                data_dir = data_root / series["name"] / run_id / shot_name
+                output_dir = output_root / series["name"] / run_id / shot_name
                 args = [sys.executable, str(WRAPPER)]
                 for key, value in parameters.items():
                     args.extend([PARAMETER_FLAGS[key], _value_text(value)])
