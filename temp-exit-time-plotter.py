@@ -4,9 +4,10 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-ER, REAPER_TIMER, BIN_WIDTH = 0.5, 6.0, 1.0
-STATS_DIR = Path(f"./output/exit_time_statistics/{ER}_emission_rate/{REAPER_TIMER}_2")
+ER, REAPER_TIMER, BIN_WIDTH = 0.5, 6.0, 2.0
+STATS_DIR = Path(f"./output_npz/exit_time_statistics/{ER}_emission_rate/{REAPER_TIMER}")
 files = sorted(STATS_DIR.glob("shot_*.npz"))
+print(len(files))
 if not files:
     raise FileNotFoundError(f"No shot files found in {STATS_DIR}")
 

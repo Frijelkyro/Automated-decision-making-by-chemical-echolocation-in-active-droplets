@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 ER, REAPER_TIMER = 0.5, 6.0
-STATS_DIR = Path(f"./output/exit_time_statistics/{ER}_emission_rate/{REAPER_TIMER}_2")
+STATS_DIR = Path(f"./output_npz/exit_time_statistics/{ER}_emission_rate/{REAPER_TIMER}")
 files = sorted(STATS_DIR.glob("shot_*.npz"))[4:]
 groups = [(0, 40), (41, 81), (82, 122), (123, 163)]
 data = [[] for _ in groups]
