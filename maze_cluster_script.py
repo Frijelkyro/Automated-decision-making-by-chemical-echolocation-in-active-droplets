@@ -62,7 +62,7 @@ write_every = 100  # write output after every this many time steps
 
 num_particles = 60 # Number of particles
 emission_rate = 0.5 # droplets per second
-emitter_position = np.array([2.8, 82.1], dtype=np.float32)
+emitter_position = np.array([2.1, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
 test_run = False

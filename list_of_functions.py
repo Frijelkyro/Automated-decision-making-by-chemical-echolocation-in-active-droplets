@@ -42,20 +42,18 @@ def moving_point_source(
     production_strength,
     local_step,
     simulation_time,
-    particle_positions,
+    particle_positions,   # (n_active, 2)
+    particle_birth_times, # (n_active,)
     dx,
     moving_source_decay_rate,
     n_steps,
 ):
     t = local_step % n_steps
-    for particle_id in range(particle_positions.shape[0]):
-        x_bin = int(np.rint(particle_positions[particle_id, 0] / dx))
-        y_bin = int(np.rint(particle_positions[particle_id, 1] / dx))
-        s[t, x_bin, y_bin] += (production_strength / (dx**2)) * np.exp(
-            -simulation_time * moving_source_decay_rate
-        )
+    bins = np.rint(particle_positions / dx).astype(int)
+    age = simulation_time - particle_birth_times
+    strength = (production_strength / dx**2) * np.exp(-moving_source_decay_rate * age)
+    np.add.at(s[t], (bins[:, 0], bins[:, 1]), strength)
     return s
-
 
 # define the source function for a static point source
 def static_point_source(
@@ -639,20 +637,22 @@ def chemical_solver(
             local_step,
             simulation_time,
             particle_positions[active_mask],
+            birth_times[active_mask],   # <-- new: per-particle birth times
             dx,
             moving_source_decay_rate,
             n_steps,
         )
-        source = static_point_source(
-            source,
-            static_source_production_strength,
-            local_step,
-            simulation_time,
-            static_source_position,
-            dx,
-            static_source_decay_rate,
-            n_steps,
-        )
+        if static_source_production_strength:
+            source = static_point_source(
+                source,
+                static_source_production_strength,
+                local_step,
+                simulation_time,
+                static_source_position,
+                dx,
+                static_source_decay_rate,
+                n_steps,
+            )
         S = source[t, 1:-1, 1:-1]
         result = (
             gamma * (A + B + C + D - 4 * E)
