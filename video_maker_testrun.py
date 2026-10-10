@@ -17,9 +17,10 @@ MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet.tsv"
 # MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv"
 PARAM = os.path.join(DATA, "param.txt")
 if not os.path.isfile(PARAM):
-    PARAM += ".bak"
+    PARAM = PARAM.removesuffix(".txt") + "_checkpoint.txt"
 GRID = os.path.join(DATA, "grid.txt")
 SHOW_TRAJECTORIES = False
+troubleshoot = True
 
 # Parameters
 params = {}
@@ -63,6 +64,11 @@ conc_files = {
     int(os.path.basename(f).split("_")[-1][:-4]): f
     for f in glob.glob(os.path.join(DATA, "conc_*.npz"))
 }
+
+if troubleshoot: 
+    part_files = part_files[-400:]
+    timestamps = timestamps[-400:]
+    # print(conc_files)
 
 if not timestamps:
     raise RuntimeError("No particle NPZ files found.")

@@ -359,9 +359,9 @@ def write_param_snapshot(parameters, simulation_time, resume_step):
     state_filename = param_filename.removesuffix(".txt") + "_state.npz"
 
     if os.path.exists(param_filename):
-        shutil.copy2(param_filename, param_filename + ".bak")
+        shutil.copy2(param_filename, param_filename.removesuffix(".txt") + "_checkpoint.txt")
     if os.path.exists(state_filename):
-        shutil.copy2(state_filename, state_filename + ".bak")
+        shutil.copy2(state_filename, state_filename.removesuffix(".npz") + "_checkpoint.npz")
 
     np.savez_compressed(
         state_filename,
@@ -377,7 +377,7 @@ def write_param_snapshot(parameters, simulation_time, resume_step):
         for key, value in parameters.items():
             if key not in {"birth_times", "active_mask", "dead_tracker", "exit_trigger_time"}:
                 f.write(f"{key}: {value}\n")
-        f.write(f"state_filename: {state_filename}\n")
+        f.write(f"state_filename: {state_filename}\n") # TODO make a checkpoint statefile persist if it has been used and mark it with globaltimestep? or sim_time?
         f.write(f"simulation_time: {simulation_time}\n")
         f.write(f"resume_step: {resume_step}\n")
 
@@ -855,7 +855,9 @@ def chemical_solver(
                     + bad_positions 
                 )
 
-                # clear the last param.txt as the param.bak should be used
+                # clear the last param.txt as the param_checkpoint should be used
+                # in case the resume sim crashes immediatly we dont want a param.txt to be left behind
+                # TODO is that still necessary with the param_checkpoint.txt implementation?
                 os.remove(param_filename) if os.path.exists(param_filename) else None
 
                 # Save the current state/output before terminating

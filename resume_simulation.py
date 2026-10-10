@@ -48,11 +48,16 @@ def _read_particles(filename, num_particles, n_steps):
 
 
 def resume_simulation_from_file(data, param_filename, maze, n_steps):
-    param_filename = os.path.join(data, "param.txt.bak")
+    state_filename = param_filename.removesuffix(".txt") + "_state_checkpoint.npz"
+    param_filename = param_filename.removesuffix(".txt") + "_checkpoint.txt"
+
+    if not os.path.exists(param_filename):
+        param_filename = "data/param.txt.bak"
+    if not os.path.exists(state_filename):
+        state_filename = "data/param_state.npz.bak"
     print(f"Using recovery parameter file: {param_filename}")
 
     old = _read_parameter_file(param_filename)
-    state_filename = os.path.join(data, "param_state.npz.bak")
 
     with np.load(state_filename) as state:
         birth_times = state["birth_times"]
@@ -84,6 +89,8 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
         num_particles,
         n_steps,
     )
+    print(f"using particle file: {part_prefix}_{resume_step}.npz")
+    print(f"using conc file: {conc_prefix}_{resume_step}.npz")
 
     return (
         conc,
