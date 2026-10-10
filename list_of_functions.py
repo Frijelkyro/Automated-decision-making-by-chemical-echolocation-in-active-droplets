@@ -841,9 +841,18 @@ def chemical_solver(
             if np.any(unsafe):
                 bad_particles = np.where(active_mask)[0][unsafe]
 
+                bad_positions = ""
+                forces = np.array([f_chem, f_int, f_sp, f_wall])
+                for i in bad_particles:
+                    bad_positions += f"forces(chem,inter,selfprop,wall): {forces[:,i,t-3:t+1]}\n"
+                    bad_positions += f"positions: x0: {position[i,t-2,0]} y0: {position[i,t-2,1]}\n"
+                    bad_positions += f"positions: x1: {position[i,t-1,0]} y1: {position[i,t-1,1]}\n"
+                    bad_positions += f"positions: x2: {position[i,t,0]} y2: {position[i,t,1]}\n"
+                    bad_positions += f"positions: x3: {position[i,t+1,0]} y3: {position[i,t+1,1]}\n"
                 print(
                     f"\n OUT-OF-BOUNDS ERROR\nParticle out of safe grid bounds at timestep {timestep}. "
-                    f"Particle id(s): {bad_particles.tolist()}"
+                    f"Particle id(s): {bad_particles.tolist()}\n"
+                    + bad_positions 
                 )
 
                 # clear the last param.txt as the param.bak should be used
