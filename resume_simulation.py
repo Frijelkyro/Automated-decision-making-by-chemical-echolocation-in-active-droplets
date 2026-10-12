@@ -68,8 +68,8 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
         resume_time = float(state["simulation_time"])
 
     num_particles = int(old["num_particles"])
-    conc_prefix = str(old["file_prefix_conc"])
-    part_prefix = str(old["file_prefix_part"])
+    conc_prefix = os.path.join(data, os.path.basename(old["file_prefix_conc"]))
+    part_prefix = os.path.join(data, os.path.basename(old["file_prefix_part"]))
 
     for prefix in (conc_prefix, part_prefix):
         prefix = os.path.basename(prefix)
