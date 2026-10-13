@@ -74,6 +74,24 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
 
         self.assertEqual([(item.simulation_time, item.timestep) for item in snapshots], [(1.0, 200), (1.0, 300), (2.0, 100)])
 
+    def test_shot_stream_restarts_in_stored_physical_time_order(self):
+        _snapshot(self.tmp_path, "part_0.npz", 0, 0.0, [(1, 1)])
+        _snapshot(self.tmp_path, "part_50.npz", 50, 2.0, [(3, 1)])
+        _snapshot(self.tmp_path, "part_100.npz", 100, 1.0, [(2, 1)])
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            row = analysis.evaluate_shot_decisions(
+                self.tmp_path,
+                _zones(),
+                (5, 5),
+                1.0,
+            )[0]
+
+        self.assertEqual(row["successes"], 1)
+        self.assertEqual(row["failures"], 0)
+
+
     def test_coordinate_mapping_flips_y_to_top_origin_row(self):
         self.assertEqual(analysis.map_sim_to_grid((2.0, 1.0), (5, 5), 1.0), (3, 2))
         self.assertEqual(analysis.map_sim_to_grid((0.0, 0.0), (5, 5), 1.0), (4, 0))
@@ -160,11 +178,21 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
 
         pooled = analysis.aggregate_birth_times(rows, averaging="pooled-count")[0]
         equal = analysis.aggregate_birth_times(rows, averaging="equal-per-shot")[0]
+        pooled_stream = analysis.BirthTimeAggregator("pooled-count", None, 0.0)
+        equal_stream = analysis.BirthTimeAggregator("equal-per-shot", None, 0.0)
+        for shot in (0, 1):
+            shot_rows = [row for row in rows if row["shot"] == shot]
+            pooled_stream.add_shot(shot_rows)
+            equal_stream.add_shot(shot_rows)
+        pooled_incremental = pooled_stream.rows()[0]
+        equal_incremental = equal_stream.rows()[0]
 
         self.assertAlmostEqual(pooled["success_fraction"], 9 / 11)
         self.assertEqual(equal["success_fraction"], 0.45)
         self.assertAlmostEqual(equal["pooled_count_success_fraction"], 9 / 11)
         self.assertEqual(equal["shots_with_completed_attempts"], 2)
+        self.assertAlmostEqual(pooled_incremental["success_fraction"], pooled["success_fraction"])
+        self.assertAlmostEqual(equal_incremental["success_fraction"], equal["success_fraction"])
 
     def test_zero_completed_attempts_produces_nan(self):
         rows = [

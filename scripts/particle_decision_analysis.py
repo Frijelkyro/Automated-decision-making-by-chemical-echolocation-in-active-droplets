@@ -303,28 +303,48 @@ def load_particle_snapshot(path: str | Path, include_forces: bool = True) -> Par
     )
 
 
-def load_particle_snapshots(data_dir: str | Path, include_forces: bool = True) -> list[ParticleSnapshot]:
-    """Read valid data-side snapshots and sort by physical time, then timestep."""
+def iter_particle_snapshots(
+    data_dir: str | Path, include_forces: bool = False
+) -> Iterable[ParticleSnapshot]:
+    """Yield snapshots in stored-time order while keeping only one payload in memory."""
     directory = Path(data_dir)
     paths = sorted(
         (path for path in directory.glob("part_*.npz") if SNAPSHOT_PATTERN.fullmatch(path.name)),
         key=lambda path: int(SNAPSHOT_PATTERN.fullmatch(path.name).group(1)),  # type: ignore[union-attr]
     )
-    snapshots = []
+    ordered_paths = []
     for path in paths:
         try:
-            snapshots.append(load_particle_snapshot(path, include_forces=include_forces))
+            with np.load(path) as archive:
+                required = {"timestep", "simulation_time"}
+                missing = required - set(archive.files)
+                if missing:
+                    raise ValueError(f"missing required fields: {', '.join(sorted(missing))}")
+                timestep = int(np.asarray(archive["timestep"]).item())
+                simulation_time = float(np.asarray(archive["simulation_time"]).item())
+                if not math.isfinite(simulation_time):
+                    raise ValueError("non-finite simulation_time")
+                ordered_paths.append((simulation_time, timestep, path))
         except (OSError, ValueError, KeyError) as error:
             warnings.warn(f"Skipping incomplete particle snapshot {path}: {error}", RuntimeWarning)
-    snapshots.sort(key=lambda snapshot: (snapshot.simulation_time, snapshot.timestep))
-    if not snapshots:
+    ordered_paths.sort(key=lambda item: (item[0], item[1]))
+    if not ordered_paths:
         raise ValueError(f"No readable part_<timestep>.npz files found in {directory}")
-    if len(snapshots) == 1:
+    if len(ordered_paths) == 1:
         warnings.warn(
             f"Only one particle snapshot is available in {directory}; decision transitions may be incomplete.",
             RuntimeWarning,
         )
-    return snapshots
+    for _, _, path in ordered_paths:
+        try:
+            yield load_particle_snapshot(path, include_forces=include_forces)
+        except (OSError, ValueError, KeyError) as error:
+            warnings.warn(f"Skipping incomplete particle snapshot {path}: {error}", RuntimeWarning)
+
+
+def load_particle_snapshots(data_dir: str | Path, include_forces: bool = True) -> list[ParticleSnapshot]:
+    """Compatibility helper that materializes snapshots; use the iterator for large shots."""
+    return list(iter_particle_snapshots(data_dir, include_forces=include_forces))
 
 
 def load_birth_times(data_dir: str | Path, particle_ids: Iterable[int]) -> dict[int, float]:
@@ -368,37 +388,53 @@ def load_birth_times(data_dir: str | Path, particle_ids: Iterable[int]) -> dict[
     }
 
 
-def evaluate_decisions(
-    snapshots: Sequence[ParticleSnapshot],
-    zones: Mapping[str, Mapping[str, np.ndarray]],
-    grid_shape: tuple[int, int],
-    dx: float,
-    birth_times: Mapping[int, float] | None = None,
-    identifiers: Mapping[str, object] | None = None,
-) -> list[dict]:
-    """Evaluate edge-triggered junction attempts for every observed particle."""
-    birth_times = birth_times or {}
-    identifiers = identifiers or {}
-    particle_ids = sorted({int(value) for snapshot in snapshots for value in snapshot.particle_ids})
-    if not particle_ids:
-        return []
-    id_to_slot = {particle_id: slot for slot, particle_id in enumerate(particle_ids)}
-    particle_count = len(particle_ids)
-    state = {
-        junction_id: {
-            "successes": np.zeros(particle_count, dtype=np.int64),
-            "failures": np.zeros(particle_count, dtype=np.int64),
-            "attempt_open": np.zeros(particle_count, dtype=bool),
-            "previous_before": np.zeros(particle_count, dtype=bool),
-            "previous_correct": np.zeros(particle_count, dtype=bool),
-            "previous_wrong": np.zeros(particle_count, dtype=bool),
-        }
-        for junction_id in zones
-    }
+class DecisionAccumulator:
+    """Incremental per-particle state for processing one snapshot at a time."""
 
-    for snapshot in snapshots:
+    def __init__(
+        self,
+        zones: Mapping[str, Mapping[str, np.ndarray]],
+        grid_shape: tuple[int, int],
+        dx: float,
+        birth_times: Mapping[int, float] | None = None,
+        identifiers: Mapping[str, object] | None = None,
+    ) -> None:
+        self.zones = zones
+        self.grid_shape = grid_shape
+        self.dx = dx
+        self.birth_times = birth_times or {}
+        self.identifiers = identifiers or {}
+        self.particle_ids: list[int] = []
+        self.id_to_slot: dict[int, int] = {}
+        self.state = {
+            junction_id: {
+                "successes": np.zeros(0, dtype=np.int64),
+                "failures": np.zeros(0, dtype=np.int64),
+                "attempt_open": np.zeros(0, dtype=bool),
+                "previous_before": np.zeros(0, dtype=bool),
+                "previous_correct": np.zeros(0, dtype=bool),
+                "previous_wrong": np.zeros(0, dtype=bool),
+            }
+            for junction_id in zones
+        }
+
+    def _ensure_particle_ids(self, particle_ids: np.ndarray) -> None:
+        new_ids = sorted(set(int(value) for value in particle_ids) - self.id_to_slot.keys())
+        if not new_ids:
+            return
+        old_count = len(self.particle_ids)
+        self.particle_ids.extend(new_ids)
+        self.id_to_slot.update({particle_id: old_count + offset for offset, particle_id in enumerate(new_ids)})
+        new_count = len(new_ids)
+        for junction_state in self.state.values():
+            for name, values in junction_state.items():
+                extension = np.zeros(new_count, dtype=values.dtype)
+                junction_state[name] = np.concatenate((values, extension))
+
+    def process(self, snapshot: ParticleSnapshot) -> None:
+        self._ensure_particle_ids(snapshot.particle_ids)
         particle_slots = np.fromiter(
-            (id_to_slot[int(particle_id)] for particle_id in snapshot.particle_ids),
+            (self.id_to_slot[int(particle_id)] for particle_id in snapshot.particle_ids),
             dtype=np.int64,
             count=len(snapshot.particle_ids),
         )
@@ -408,21 +444,22 @@ def evaluate_decisions(
         cols = np.full(len(positions), -1, dtype=np.int64)
         finite_indices = np.flatnonzero(finite)
         if len(finite_indices):
-            cols[finite_indices] = np.rint(positions[finite_indices, 0] / dx).astype(np.int64)
-            rows[finite_indices] = grid_shape[0] - 1 - np.rint(
-                positions[finite_indices, 1] / dx
+            cols[finite_indices] = np.rint(positions[finite_indices, 0] / self.dx).astype(np.int64)
+            rows[finite_indices] = self.grid_shape[0] - 1 - np.rint(
+                positions[finite_indices, 1] / self.dx
             ).astype(np.int64)
         valid = (
             finite
             & (rows >= 0)
-            & (rows < grid_shape[0])
+            & (rows < self.grid_shape[0])
             & (cols >= 0)
-            & (cols < grid_shape[1])
+            & (cols < self.grid_shape[1])
         )
         valid_slots = particle_slots[valid]
 
-        for junction_id, masks in zones.items():
-            junction_state = state[junction_id]
+        particle_count = len(self.particle_ids)
+        for junction_id, masks in self.zones.items():
+            junction_state = self.state[junction_id]
             current_before = np.zeros(particle_count, dtype=bool)
             current_correct = np.zeros(particle_count, dtype=bool)
             current_wrong = np.zeros(particle_count, dtype=bool)
@@ -466,27 +503,93 @@ def evaluate_decisions(
             junction_state["previous_correct"] = current_correct
             junction_state["previous_wrong"] = current_wrong
 
-    results = []
-    for junction_id, junction_state in state.items():
-        for slot, particle_id in enumerate(particle_ids):
-            successes = int(junction_state["successes"][slot])
-            failures = int(junction_state["failures"][slot])
-            pending = int(junction_state["attempt_open"][slot])
-            completed = successes + failures
-            results.append(
-                {
-                    **identifiers,
-                    "particle_id": particle_id,
-                    "birth_time": float(birth_times.get(particle_id, math.nan)),
-                    "junction_id": junction_id,
-                    "successes": successes,
-                    "failures": failures,
-                    "pending_attempts": pending,
-                    "no_attempt": int(completed == 0 and pending == 0),
-                    "success_fraction": successes / completed if completed else math.nan,
-                }
-            )
-    return results
+    def rows(self) -> list[dict]:
+        results = []
+        for junction_id, junction_state in self.state.items():
+            for slot, particle_id in sorted(enumerate(self.particle_ids), key=lambda item: item[1]):
+                successes = int(junction_state["successes"][slot])
+                failures = int(junction_state["failures"][slot])
+                pending = int(junction_state["attempt_open"][slot])
+                completed = successes + failures
+                results.append(
+                    {
+                        **self.identifiers,
+                        "particle_id": particle_id,
+                        "birth_time": float(self.birth_times.get(particle_id, math.nan)),
+                        "junction_id": junction_id,
+                        "successes": successes,
+                        "failures": failures,
+                        "pending_attempts": pending,
+                        "no_attempt": int(completed == 0 and pending == 0),
+                        "success_fraction": successes / completed if completed else math.nan,
+                    }
+                )
+        return results
+
+
+def evaluate_decisions(
+    snapshots: Iterable[ParticleSnapshot],
+    zones: Mapping[str, Mapping[str, np.ndarray]],
+    grid_shape: tuple[int, int],
+    dx: float,
+    birth_times: Mapping[int, float] | None = None,
+    identifiers: Mapping[str, object] | None = None,
+) -> list[dict]:
+    """Evaluate edge-triggered junction attempts for every observed particle."""
+    accumulator = DecisionAccumulator(zones, grid_shape, dx, birth_times, identifiers)
+    for snapshot in snapshots:
+        accumulator.process(snapshot)
+    return accumulator.rows()
+
+
+def evaluate_shot_decisions(
+    data_dir: str | Path,
+    zones: Mapping[str, Mapping[str, np.ndarray]],
+    grid_shape: tuple[int, int],
+    dx: float,
+    identifiers: Mapping[str, object] | None = None,
+) -> list[dict]:
+    """Stream a shot in filename order when verified, with a sorted fallback."""
+    directory = Path(data_dir)
+    paths = sorted(
+        (path for path in directory.glob("part_*.npz") if SNAPSHOT_PATTERN.fullmatch(path.name)),
+        key=lambda path: int(SNAPSHOT_PATTERN.fullmatch(path.name).group(1)),  # type: ignore[union-attr]
+    )
+    if not paths:
+        raise ValueError(f"No part_<timestep>.npz files found in {directory}")
+
+    accumulator = None
+    birth_times: dict[int, float] = {}
+    previous_key = None
+    needs_sorted_pass = False
+    for path in paths:
+        try:
+            snapshot = load_particle_snapshot(path, include_forces=False)
+        except (OSError, ValueError, KeyError) as error:
+            warnings.warn(f"Skipping incomplete particle snapshot {path}: {error}", RuntimeWarning)
+            continue
+        sort_key = (snapshot.simulation_time, snapshot.timestep)
+        if previous_key is not None and sort_key < previous_key:
+            needs_sorted_pass = True
+            break
+        if accumulator is None:
+            birth_times = load_birth_times(directory, snapshot.particle_ids)
+            accumulator = DecisionAccumulator(zones, grid_shape, dx, birth_times, identifiers)
+        accumulator.process(snapshot)
+        previous_key = sort_key
+
+    if accumulator is None:
+        raise ValueError(f"No readable part_<timestep>.npz files found in {directory}")
+    if needs_sorted_pass:
+        warnings.warn(
+            f"Stored physical times in {directory} are not ordered by timestep; restarting this shot "
+            "with a metadata-sorted streaming pass.",
+            RuntimeWarning,
+        )
+        accumulator = DecisionAccumulator(zones, grid_shape, dx, birth_times, identifiers)
+        for snapshot in iter_particle_snapshots(directory, include_forces=False):
+            accumulator.process(snapshot)
+    return accumulator.rows()
 
 
 def summarize_junctions(particle_rows: Sequence[Mapping]) -> list[dict]:
@@ -619,6 +722,146 @@ def aggregate_birth_times(
     return summaries
 
 
+class BirthTimeAggregator:
+    """Merge one-shot summaries into compact pooled and equal-shot statistics."""
+
+    GROUP_KEYS = ("series_name", "regime_name", "config_index", "run_id", "junction_id")
+
+    def __init__(
+        self,
+        averaging: str,
+        birth_bin_width: float | None,
+        birth_time_tolerance: float,
+    ) -> None:
+        if averaging not in {"pooled-count", "equal-per-shot"}:
+            raise ValueError("averaging must be 'pooled-count' or 'equal-per-shot'")
+        self.averaging = averaging
+        self.birth_bin_width = birth_bin_width
+        self.birth_time_tolerance = birth_time_tolerance
+        self.groups: dict[tuple, list[dict]] = defaultdict(list)
+
+    def add_shot(self, particle_rows: Sequence[Mapping]) -> None:
+        shot_summaries = aggregate_birth_times(
+            particle_rows,
+            averaging="pooled-count",
+            birth_bin_width=self.birth_bin_width,
+            birth_time_tolerance=self.birth_time_tolerance,
+        )
+        for summary in shot_summaries:
+            group_key = tuple(summary[key] for key in self.GROUP_KEYS)
+            bins = self.groups[group_key]
+            bin_id = None
+            if self.birth_bin_width is not None:
+                bin_id = math.floor(float(summary["birth_time"]) / self.birth_bin_width)
+                bucket = next((item for item in bins if item["bin_id"] == bin_id), None)
+            else:
+                candidates = [
+                    item
+                    for item in bins
+                    if abs(
+                        float(summary["birth_time"])
+                        - item["birth_time"] / item["birth_time_weight"]
+                    )
+                    <= self.birth_time_tolerance
+                ]
+                bucket = (
+                    min(
+                        candidates,
+                        key=lambda item: abs(
+                            float(summary["birth_time"])
+                            - item["birth_time"] / item["birth_time_weight"]
+                        ),
+                    )
+                    if candidates
+                    else None
+                )
+            if bucket is None:
+                bucket = {
+                    "bin_id": bin_id if self.birth_bin_width is not None else None,
+                    "birth_time": 0.0,
+                    "birth_time_weight": 0,
+                    "bin_start": float(summary["bin_start"]),
+                    "bin_end": float(summary["bin_end"]),
+                    "particles": 0,
+                    "completed_attempt_particles": 0,
+                    "successes": 0,
+                    "failures": 0,
+                    "pending_attempts": 0,
+                    "particles_with_no_attempt": 0,
+                    "shots_with_completed_attempts": 0,
+                    "shot_fraction_mean": 0.0,
+                    "shot_fraction_m2": 0.0,
+                }
+                bins.append(bucket)
+
+            particle_count = int(summary["particles"])
+            bucket["birth_time"] += float(summary["birth_time"]) * particle_count
+            bucket["birth_time_weight"] += particle_count
+            bucket["bin_start"] = min(bucket["bin_start"], float(summary["bin_start"]))
+            bucket["bin_end"] = max(bucket["bin_end"], float(summary["bin_end"]))
+            for field in (
+                "particles",
+                "completed_attempt_particles",
+                "successes",
+                "failures",
+                "pending_attempts",
+                "particles_with_no_attempt",
+            ):
+                bucket[field] += int(summary[field])
+
+            shot_denominator = int(summary["successes"]) + int(summary["failures"])
+            if shot_denominator:
+                shot_fraction = int(summary["successes"]) / shot_denominator
+                count = bucket["shots_with_completed_attempts"] + 1
+                delta = shot_fraction - bucket["shot_fraction_mean"]
+                bucket["shot_fraction_mean"] += delta / count
+                bucket["shot_fraction_m2"] += delta * (shot_fraction - bucket["shot_fraction_mean"])
+                bucket["shots_with_completed_attempts"] = count
+
+    def rows(self) -> list[dict]:
+        summaries = []
+        for group_key, bins in self.groups.items():
+            for bucket in bins:
+                successes = bucket["successes"]
+                failures = bucket["failures"]
+                pooled_fraction = successes / (successes + failures) if successes + failures else math.nan
+                shot_count = bucket["shots_with_completed_attempts"]
+                standard_deviation = (
+                    math.sqrt(bucket["shot_fraction_m2"] / (shot_count - 1))
+                    if shot_count > 1
+                    else 0.0 if shot_count else math.nan
+                )
+                standard_error = standard_deviation / math.sqrt(shot_count) if shot_count else math.nan
+                equal_fraction = bucket["shot_fraction_mean"] if shot_count else math.nan
+                summaries.append(
+                    {
+                        **dict(zip(self.GROUP_KEYS, group_key)),
+                        "birth_time": bucket["birth_time"] / bucket["birth_time_weight"],
+                        "bin_start": bucket["bin_start"],
+                        "bin_end": bucket["bin_end"],
+                        "averaging_method": self.averaging,
+                        "success_fraction": pooled_fraction if self.averaging == "pooled-count" else equal_fraction,
+                        "pooled_count_success_fraction": pooled_fraction,
+                        "equal_per_shot_success_fraction": equal_fraction,
+                        "success_fraction_std": standard_deviation,
+                        "success_fraction_se": standard_error,
+                        **{field: bucket[field] for field in (
+                            "particles",
+                            "completed_attempt_particles",
+                            "successes",
+                            "failures",
+                            "pending_attempts",
+                            "particles_with_no_attempt",
+                            "shots_with_completed_attempts",
+                        )},
+                    }
+                )
+        return sorted(
+            summaries,
+            key=lambda row: (row["regime_name"], row["config_index"], row["junction_id"], row["birth_time"]),
+        )
+
+
 def write_csv(path: str | Path, rows: Sequence[Mapping], fieldnames: Sequence[str]) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -676,7 +919,7 @@ def _default_analysis_dir(project_root: Path) -> Path:
     return candidates[0].parent
 
 
-def run_analysis(args: argparse.Namespace) -> tuple[Path, list[dict], list[dict]]:
+def run_analysis(args: argparse.Namespace) -> tuple[Path, int, int]:
     project_root = Path(args.project_root).resolve()
     config = load_series_config(args.config, project_root)
     shots = discover_shots(config, project_root, args.regime, args.configuration, args.shot)
@@ -685,19 +928,35 @@ def run_analysis(args: argparse.Namespace) -> tuple[Path, list[dict], list[dict]
         analysis_dir = project_root / analysis_dir
     metadata, zones = load_maze_analysis(analysis_dir)
 
-    particle_rows = []
-    for shot in shots:
-        try:
-            snapshots = load_particle_snapshots(shot.data_dir, include_forces=False)
-            particle_ids = {int(particle_id) for snapshot in snapshots for particle_id in snapshot.particle_ids}
-            births = load_birth_times(shot.data_dir, particle_ids)
-            particle_rows.extend(
-                evaluate_decisions(
-                    snapshots,
+    series = config["series"]
+    output_dir = Path(args.output_dir) if args.output_dir else Path(series["output_root"]) / series["name"] / "decision_analysis"
+    if not output_dir.is_absolute():
+        output_dir = project_root / output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    particle_count = junction_count = 0
+    missing_birth_time_count = 0
+    aggregator = (
+        BirthTimeAggregator(args.averaging, args.birth_bin_width, args.birth_time_tolerance)
+        if args.aggregate_shots
+        else None
+    )
+    particle_csv_path = output_dir / "particle_decisions.csv"
+    junction_csv_path = output_dir / "junction_summary.csv"
+    with particle_csv_path.open("w", newline="", encoding="utf-8") as particle_file, junction_csv_path.open(
+        "w", newline="", encoding="utf-8"
+    ) as junction_file:
+        particle_writer = csv.DictWriter(particle_file, fieldnames=PARTICLE_FIELDS, extrasaction="ignore")
+        junction_writer = csv.DictWriter(junction_file, fieldnames=JUNCTION_FIELDS, extrasaction="ignore")
+        particle_writer.writeheader()
+        junction_writer.writeheader()
+
+        for shot in shots:
+            try:
+                particle_rows = evaluate_shot_decisions(
+                    shot.data_dir,
                     zones,
                     metadata["grid_shape"],
                     metadata["dx"],
-                    births,
                     {
                         "series_name": shot.series_name,
                         "regime_name": shot.regime_name,
@@ -706,40 +965,35 @@ def run_analysis(args: argparse.Namespace) -> tuple[Path, list[dict], list[dict]
                         "shot": shot.shot,
                     },
                 )
-            )
-        except (OSError, ValueError, KeyError) as error:
-            warnings.warn(f"Skipped incomplete shot {shot.data_dir}: {error}", RuntimeWarning)
+                junction_rows = summarize_junctions(particle_rows)
+                particle_writer.writerows(particle_rows)
+                junction_writer.writerows(junction_rows)
+                particle_file.flush()
+                junction_file.flush()
+                particle_count += len(particle_rows)
+                junction_count += len(junction_rows)
+                missing_birth_time_count += sum(
+                    not math.isfinite(float(row["birth_time"])) for row in particle_rows
+                )
+                if aggregator is not None:
+                    aggregator.add_shot(particle_rows)
+            except (OSError, ValueError, KeyError, StopIteration) as error:
+                warnings.warn(f"Skipped incomplete shot {shot.data_dir}: {error}", RuntimeWarning)
 
-    series = config["series"]
-    output_dir = Path(args.output_dir) if args.output_dir else Path(series["output_root"]) / series["name"] / "decision_analysis"
-    if not output_dir.is_absolute():
-        output_dir = project_root / output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
-    junction_rows = summarize_junctions(particle_rows)
-    write_csv(output_dir / "particle_decisions.csv", particle_rows, PARTICLE_FIELDS)
-    write_csv(output_dir / "junction_summary.csv", junction_rows, JUNCTION_FIELDS)
-
-    aggregate_rows = []
-    if args.aggregate_shots:
-        finite_births = sum(math.isfinite(float(row["birth_time"])) for row in particle_rows)
-        if finite_births < len(particle_rows):
+    if aggregator is not None:
+        if missing_birth_time_count:
             warnings.warn(
-                f"{len(particle_rows) - finite_births} particle-junction row(s) have no verified birth time "
+                f"{missing_birth_time_count} particle-junction row(s) have no verified birth time "
                 "and are excluded from birth-time averaging.",
                 RuntimeWarning,
             )
-        aggregate_rows = aggregate_birth_times(
-            particle_rows,
-            args.averaging,
-            args.birth_bin_width,
-            args.birth_time_tolerance,
-        )
+        aggregate_rows = aggregator.rows()
         write_csv(output_dir / "birth_time_summary.csv", aggregate_rows, AGGREGATE_FIELDS)
         if args.plot:
             plot_birth_time_summary(aggregate_rows, output_dir / "success_fraction_vs_birth_time.png")
     elif args.plot:
         warnings.warn("--plot requires --aggregate-shots; no plot was written.", RuntimeWarning)
-    return output_dir, particle_rows, junction_rows
+    return output_dir, particle_count, junction_count
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -762,11 +1016,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_argument_parser().parse_args(argv)
     try:
-        output_dir, particle_rows, junction_rows = run_analysis(args)
+        output_dir, particle_count, junction_count = run_analysis(args)
     except (OSError, ValueError, KeyError) as error:
         raise SystemExit(str(error)) from error
     print(
-        f"Wrote {len(particle_rows)} particle-junction rows and {len(junction_rows)} "
+        f"Wrote {particle_count} particle-junction rows and {junction_count} "
         f"shot-junction rows to {output_dir}"
     )
     return 0
