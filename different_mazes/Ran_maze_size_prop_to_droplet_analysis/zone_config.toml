@@ -1,0 +1,102 @@
+# User-editable decision-zone distances for each junction.
+# Adjust values and rerun the script to regenerate masks and plots.
+
+[J01]
+before = 2
+correct = 6
+wrong = 6
+
+[J016]
+before = 2
+correct = 6
+wrong = 6
+
+[J02]
+before = 2
+correct = 6
+wrong = 6
+
+[J03]
+before = 2
+correct = 6
+wrong = 6
+
+[J04]
+before = 2
+correct = 6
+wrong = 6
+
+[J05]
+before = 2
+correct = 6
+wrong = 6
+
+[J06]
+before = 2
+correct = 6
+wrong = 6
+
+[J07]
+before = 2
+correct = 6
+wrong = 6
+
+[J08]
+before = 2
+correct = 6
+wrong = 6
+
+[J09]
+before = 2
+correct = 6
+wrong = 6
+
+[J10]
+before = 2
+correct = 6
+wrong = 6
+
+[J11]
+before = 2
+correct = 6
+wrong = 6
+
+[J116]
+before = 2
+correct = 6
+wrong = 6
+
+[J12]
+before = 2
+correct = 6
+wrong = 6
+
+[J13]
+before = 2
+correct = 6
+wrong = 6
+
+[J14]
+before = 2
+correct = 6
+wrong = 6
+
+[J15]
+before = 2
+correct = 6
+wrong = 6
+
+[J16]
+before = 2
+correct = 6
+wrong = 6
+
+[J17]
+before = 2
+correct = 6
+wrong = 6
+
+[J18]
+before = 8
+correct = 10
+wrong = 8
