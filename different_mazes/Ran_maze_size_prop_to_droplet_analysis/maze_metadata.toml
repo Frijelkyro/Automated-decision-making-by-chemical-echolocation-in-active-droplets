@@ -8,7 +8,6 @@ emitter_grid = [27, 3]
 goal_grid = [94, 84]
 plot_path = "different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_decision_zones.png"
 
-[[junctions]]
 
 [[junctions]]
 id = "J01"
@@ -16,7 +15,7 @@ center = [27, 9]
 path_index = 5
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(25), np.int64(9)), (np.int64(27), np.int64(7)), (np.int64(29), np.int64(9))]
+neighbors = [[25, 9], [27, 7], [29, 9]]
 
 [[junctions]]
 id = "J02"
@@ -24,7 +23,7 @@ center = [21, 31]
 path_index = 31
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(19), np.int64(31)), (np.int64(21), np.int64(29)), (np.int64(23), np.int64(31))]
+neighbors = [[19, 31], [21, 29], [23, 31]]
 
 [[junctions]]
 id = "J03"
@@ -32,7 +31,7 @@ center = [15, 52]
 path_index = 56
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(13), np.int64(52)), (np.int64(15), np.int64(50)), (np.int64(17), np.int64(52))]
+neighbors = [[13, 52], [15, 50], [17, 52]]
 
 [[junctions]]
 id = "J04"
@@ -40,7 +39,7 @@ center = [9, 73]
 path_index = 81
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(7), np.int64(73)), (np.int64(9), np.int64(71)), (np.int64(11), np.int64(73))]
+neighbors = [[7, 73], [9, 71], [11, 73]]
 
 [[junctions]]
 id = "J05"
@@ -48,7 +47,7 @@ center = [21, 95]
 path_index = 125
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(19), np.int64(95)), (np.int64(21), np.int64(93)), (np.int64(23), np.int64(95))]
+neighbors = [[19, 95], [21, 93], [23, 95]]
 
 [[junctions]]
 id = "J06"
@@ -56,7 +55,7 @@ center = [33, 67]
 path_index = 163
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(31), np.int64(67)), (np.int64(33), np.int64(69)), (np.int64(35), np.int64(67))]
+neighbors = [[31, 67], [33, 69], [35, 67]]
 
 [[junctions]]
 id = "J07"
@@ -64,7 +63,7 @@ center = [39, 46]
 path_index = 188
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(37), np.int64(46)), (np.int64(39), np.int64(48)), (np.int64(41), np.int64(46))]
+neighbors = [[37, 46], [39, 48], [41, 46]]
 
 [[junctions]]
 id = "J08"
@@ -72,7 +71,7 @@ center = [45, 24]
 path_index = 214
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(43), np.int64(24)), (np.int64(45), np.int64(26)), (np.int64(47), np.int64(24))]
+neighbors = [[43, 24], [45, 26], [47, 24]]
 
 [[junctions]]
 id = "J09"
@@ -80,7 +79,7 @@ center = [51, 3]
 path_index = 239
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(49), np.int64(3)), (np.int64(51), np.int64(5)), (np.int64(53), np.int64(3))]
+neighbors = [[49, 3], [51, 5], [53, 3]]
 
 [[junctions]]
 id = "J10"
@@ -88,7 +87,7 @@ center = [63, 31]
 path_index = 277
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(61), np.int64(31)), (np.int64(63), np.int64(29)), (np.int64(65), np.int64(31))]
+neighbors = [[61, 31], [63, 29], [65, 31]]
 
 [[junctions]]
 id = "J11"
@@ -96,7 +95,7 @@ center = [57, 52]
 path_index = 302
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(55), np.int64(52)), (np.int64(57), np.int64(50)), (np.int64(59), np.int64(52))]
+neighbors = [[55, 52], [57, 50], [59, 52]]
 
 [[junctions]]
 id = "J12"
@@ -104,7 +103,7 @@ center = [51, 73]
 path_index = 327
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(49), np.int64(73)), (np.int64(51), np.int64(71)), (np.int64(53), np.int64(73))]
+neighbors = [[49, 73], [51, 71], [53, 73]]
 
 [[junctions]]
 id = "J13"
@@ -112,7 +111,7 @@ center = [65, 91]
 path_index = 373
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(64), np.int64(90)), (np.int64(64), np.int64(93)), (np.int64(67), np.int64(90))]
+neighbors = [[64, 90], [64, 93], [67, 90]]
 
 [[junctions]]
 id = "J14"
@@ -120,7 +119,7 @@ center = [75, 67]
 path_index = 403
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(73), np.int64(67)), (np.int64(75), np.int64(69)), (np.int64(77), np.int64(67))]
+neighbors = [[73, 67], [75, 69], [77, 67]]
 
 [[junctions]]
 id = "J15"
@@ -128,7 +127,7 @@ center = [82, 46]
 path_index = 429
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(80), np.int64(46)), (np.int64(82), np.int64(48)), (np.int64(84), np.int64(46))]
+neighbors = [[80, 46], [82, 48], [84, 46]]
 
 [[junctions]]
 id = "J16"
@@ -136,7 +135,7 @@ center = [88, 24]
 path_index = 455
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(86), np.int64(24)), (np.int64(88), np.int64(26)), (np.int64(90), np.int64(24))]
+neighbors = [[86, 24], [88, 26], [90, 24]]
 
 [[junctions]]
 id = "J17"
@@ -144,4 +143,4 @@ center = [94, 52]
 path_index = 549
 branch_count = 3
 kind = "Y"
-neighbors = [(np.int64(92), np.int64(52)), (np.int64(94), np.int64(50)), (np.int64(96), np.int64(52))]
+neighbors = [[92, 52], [94, 50], [96, 52]]

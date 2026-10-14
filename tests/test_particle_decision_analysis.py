@@ -1,19 +1,23 @@
 import math
+import csv
+import sys
 import tempfile
+import tomllib
 import unittest
 import warnings
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
+from scripts import maze_skeleton_path as maze_analysis
 from scripts import particle_decision_analysis as analysis
 
 
-def _snapshot(tmp_path, filename, timestep, simulation_time, positions):
+def _write_snapshot(directory, timestep, simulation_time, positions):
     positions = np.asarray(positions, dtype=float)
-    path = tmp_path / filename
     np.savez(
-        path,
+        directory / f"part_{timestep}.npz",
         timestep=timestep,
         simulation_time=simulation_time,
         x=positions[:, 0],
@@ -21,198 +25,191 @@ def _snapshot(tmp_path, filename, timestep, simulation_time, positions):
         vx=np.zeros(len(positions)),
         vy=np.zeros(len(positions)),
     )
-    return analysis.load_particle_snapshot(path)
 
 
-def _zones():
-    before = np.zeros((5, 5), dtype=bool)
+def _maze_artifacts(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    before = np.zeros((5, 5), dtype=np.uint8)
     correct = np.zeros_like(before)
     wrong = np.zeros_like(before)
-    before[3, 1] = True
-    correct[3, 2] = True
-    wrong[3, 3] = True
-    return {"J01": {"before": before, "correct": correct, "wrong": wrong}}
+    before[3, 1] = 1
+    correct[3, 2] = 1
+    wrong[3, 3] = 1
+    np.savez_compressed(directory / "zone_masks.npz", J01_before=before, J01_correct=correct, J01_wrong=wrong)
+    (directory / "maze_metadata.toml").write_text("dx = 1.0\ngrid_shape = [5, 5]\n", encoding="utf-8")
 
 
 class ParticleDecisionAnalysisTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.tmp_path = Path(self.temp_dir.name)
+        self.root = Path(self.temp_dir.name)
 
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_discover_shots_follows_grid_order_and_filters(self):
-        config = {
-            "series": {"name": "demo", "data_root": "data"},
-            "regimes": [
-                {
-                    "name": "r1",
-                    "shots": 2,
-                    "grid": {"first": [10, 20], "second": [1, 2]},
-                }
-            ],
-        }
-        for config_index in range(4):
-            for shot in range(2):
-                path = self.tmp_path / "data" / "demo" / f"r1_c{config_index:04d}" / f"shot_{shot:03d}"
-                path.mkdir(parents=True)
-
-        all_shots = analysis.discover_shots(config, self.tmp_path)
-        found = analysis.discover_shots(config, self.tmp_path, configurations=[2], shots=[1])
-
-        self.assertEqual([shot.config_index for shot in all_shots], [0, 0, 1, 1, 2, 2, 3, 3])
-        self.assertEqual([(shot.config_index, shot.shot) for shot in found], [(2, 1)])
-        self.assertEqual(found[0].data_dir, self.tmp_path / "data" / "demo" / "r1_c0002" / "shot_001")
-
-    def test_snapshots_sort_by_physical_time_then_timestep(self):
-        _snapshot(self.tmp_path, "part_100.npz", 100, 2.0, [(0, 0)])
-        _snapshot(self.tmp_path, "part_300.npz", 300, 1.0, [(0, 0)])
-        _snapshot(self.tmp_path, "part_200.npz", 200, 1.0, [(0, 0)])
-
-        snapshots = analysis.load_particle_snapshots(self.tmp_path, include_forces=False)
-
-        self.assertEqual([(item.simulation_time, item.timestep) for item in snapshots], [(1.0, 200), (1.0, 300), (2.0, 100)])
-
-    def test_shot_stream_restarts_in_stored_physical_time_order(self):
-        _snapshot(self.tmp_path, "part_0.npz", 0, 0.0, [(1, 1)])
-        _snapshot(self.tmp_path, "part_50.npz", 50, 2.0, [(3, 1)])
-        _snapshot(self.tmp_path, "part_100.npz", 100, 1.0, [(2, 1)])
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            row = analysis.evaluate_shot_decisions(
-                self.tmp_path,
-                _zones(),
-                (5, 5),
-                1.0,
-            )[0]
-
-        self.assertEqual(row["successes"], 1)
-        self.assertEqual(row["failures"], 0)
-
-
-    def test_coordinate_mapping_flips_y_to_top_origin_row(self):
-        self.assertEqual(analysis.map_sim_to_grid((2.0, 1.0), (5, 5), 1.0), (3, 2))
-        self.assertEqual(analysis.map_sim_to_grid((0.0, 0.0), (5, 5), 1.0), (4, 0))
-
-    def test_state_transitions_count_success_and_failure_once(self):
-        snapshots = [
-            _snapshot(self.tmp_path, "part_0.npz", 0, 0.0, [(1, 1), (1, 1)]),
-            _snapshot(self.tmp_path, "part_1.npz", 1, 1.0, [(2, 1), (1, 1)]),
-            _snapshot(self.tmp_path, "part_2.npz", 2, 2.0, [(2, 2), (3, 1)]),
-            _snapshot(self.tmp_path, "part_3.npz", 3, 3.0, [(2, 2), (3, 1)]),
-            _snapshot(self.tmp_path, "part_4.npz", 4, 4.0, [(2, 2), (3, 1)]),
+    def test_zone_masks_expand_across_corridor_and_to_dead_end(self):
+        shape = (7, 15)
+        free = np.zeros(shape, dtype=bool)
+        free[2:5, 1:14] = True
+        free[0:7, 6:9] = True
+        path = [(3, col) for col in range(1, 14)]
+        skeleton = np.zeros(shape, dtype=bool)
+        branch = [(row, 7) for row in range(2, -1, -1)]
+        for cell in path + branch:
+            skeleton[cell] = True
+        graph = {cell: [] for cell in path + branch}
+        for first, second in zip(path, path[1:]):
+            graph[first].append(second)
+            graph[second].append(first)
+        branch_chain = [(3, 7)] + branch
+        for first, second in zip(branch_chain, branch_chain[1:]):
+            graph[first].append(second)
+            graph[second].append(first)
+        junctions = [
+            {"id": "J01", "center": (3, 7), "cluster": {(3, 7)}},
+            {"id": "J02", "center": (3, 11), "cluster": {(3, 11)}},
         ]
 
-        rows = analysis.evaluate_decisions(snapshots, _zones(), (5, 5), 1.0)
-        by_id = {row["particle_id"]: row for row in rows}
+        zones = maze_analysis.build_zones(junctions, graph, skeleton, free, path)
 
-        self.assertEqual(by_id[0]["successes"], 1)
-        self.assertEqual(by_id[0]["failures"], 0)
-        self.assertEqual(by_id[0]["success_fraction"], 1.0)
-        self.assertEqual(by_id[1]["successes"], 0)
-        self.assertEqual(by_id[1]["failures"], 1)
-        self.assertEqual(by_id[1]["success_fraction"], 0.0)
+        self.assertTrue(all((row, 2) in zones["J01"]["before"] for row in (2, 3, 4)))
+        self.assertTrue(all((row, 9) in zones["J01"]["correct"] for row in (2, 3, 4)))
+        self.assertIn((0, 7), zones["J01"]["wrong"])
+        self.assertIn((1, 6), zones["J01"]["wrong"])
 
-    def test_pending_attempt_and_no_attempt_are_separate(self):
-        snapshots = [
-            _snapshot(self.tmp_path, "part_0.npz", 0, 0.0, [(1, 1), (4, 1)]),
-            _snapshot(self.tmp_path, "part_1.npz", 1, 1.0, [(1, 1), (4, 1)]),
-        ]
-
-        rows = analysis.evaluate_decisions(snapshots, _zones(), (5, 5), 1.0)
-        by_id = {row["particle_id"]: row for row in rows}
-
-        self.assertEqual(by_id[0]["pending_attempts"], 1)
-        self.assertEqual(by_id[0]["no_attempt"], 0)
-        self.assertTrue(math.isnan(by_id[0]["success_fraction"]))
-        self.assertEqual(by_id[1]["pending_attempts"], 0)
-        self.assertEqual(by_id[1]["no_attempt"], 1)
-        self.assertTrue(math.isnan(by_id[1]["success_fraction"]))
-
-    def test_correct_wrong_overlap_is_ambiguous_and_does_not_close(self):
-        zones = _zones()
-        zones["J01"]["wrong"][3, 2] = True
-        snapshots = [
-            _snapshot(self.tmp_path, "part_0.npz", 0, 0.0, [(1, 1)]),
-            _snapshot(self.tmp_path, "part_1.npz", 1, 1.0, [(2, 1)]),
-            _snapshot(self.tmp_path, "part_2.npz", 2, 2.0, [(2, 2)]),
-        ]
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            row = analysis.evaluate_decisions(snapshots, zones, (5, 5), 1.0)[0]
-
-        self.assertEqual(row["pending_attempts"], 1)
-        self.assertEqual(row["successes"], row["failures"], 0)
-
-    def test_malformed_unused_neighbors_are_ignored_for_metadata(self):
-        text = "dx = 1.0\ngrid_shape = [5, 5]\n[[junctions]]\nneighbors = [(np.int64(1), np.int64(2))]"
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            metadata = analysis._load_metadata_text(text, self.tmp_path / "maze_metadata.toml")
-
-        self.assertEqual(metadata["grid_shape"], [5, 5])
-        self.assertTrue(caught)
-
-    def test_aggregation_distinguishes_pooled_and_equal_shot(self):
-        rows = []
-        for shot, successes, failures in ((0, 9, 1), (1, 0, 1)):
-            for index in range(successes + failures):
-                rows.append(
-                    {
-                        "series_name": "s",
-                        "regime_name": "r",
-                        "config_index": 0,
-                        "run_id": "r_c0000",
-                        "shot": shot,
-                        "junction_id": "J01",
-                        "birth_time": 2.0,
-                        "successes": int(index < successes),
-                        "failures": int(index >= successes),
-                        "pending_attempts": 0,
-                        "no_attempt": 0,
-                    }
-                )
-
-        pooled = analysis.aggregate_birth_times(rows, averaging="pooled-count")[0]
-        equal = analysis.aggregate_birth_times(rows, averaging="equal-per-shot")[0]
-        pooled_stream = analysis.BirthTimeAggregator("pooled-count", None, 0.0)
-        equal_stream = analysis.BirthTimeAggregator("equal-per-shot", None, 0.0)
-        for shot in (0, 1):
-            shot_rows = [row for row in rows if row["shot"] == shot]
-            pooled_stream.add_shot(shot_rows)
-            equal_stream.add_shot(shot_rows)
-        pooled_incremental = pooled_stream.rows()[0]
-        equal_incremental = equal_stream.rows()[0]
-
-        self.assertAlmostEqual(pooled["success_fraction"], 9 / 11)
-        self.assertEqual(equal["success_fraction"], 0.45)
-        self.assertAlmostEqual(equal["pooled_count_success_fraction"], 9 / 11)
-        self.assertEqual(equal["shots_with_completed_attempts"], 2)
-        self.assertAlmostEqual(pooled_incremental["success_fraction"], pooled["success_fraction"])
-        self.assertAlmostEqual(equal_incremental["success_fraction"], equal["success_fraction"])
-
-    def test_zero_completed_attempts_produces_nan(self):
-        rows = [
+    def test_metadata_neighbors_are_valid_toml_integer_pairs(self):
+        path = [(1, 1), (1, 2)]
+        junctions = [
             {
-                "series_name": "s",
-                "regime_name": "r",
-                "config_index": 0,
-                "run_id": "r_c0000",
-                "shot": 0,
-                "junction_id": "J01",
-                "birth_time": 2.0,
-                "successes": 0,
-                "failures": 0,
-                "pending_attempts": 1,
-                "no_attempt": 0,
+                "id": "J01",
+                "center": (1, 1),
+                "path_index": 0,
+                "branch_count": 1,
+                "kind": "Y",
+                "neighbors": [(np.int64(2), np.int64(3)), (np.int64(4), np.int64(5))],
             }
         ]
+        metadata_path = self.root / "maze_metadata.toml"
+        maze_analysis.save_metadata(
+            metadata_path,
+            Path("maze.tsv"),
+            {"wall_value": 1, "free_mask": np.zeros((6, 6), dtype=bool)},
+            path,
+            junctions,
+            {},
+            (1, 1),
+            (1, 2),
+            Path("plot.png"),
+        )
 
-        self.assertTrue(math.isnan(analysis.summarize_junctions(rows)[0]["success_fraction"]))
-        self.assertTrue(math.isnan(analysis.aggregate_birth_times(rows)[0]["success_fraction"]))
+        parsed = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(parsed["junctions"][0]["neighbors"], [[2, 3], [4, 5]])
+        self.assertEqual(len(parsed["junctions"]), 1)
+
+    def test_birth_before_gate_and_nan_retirement(self):
+        data_dir = self.root / "shot_000"
+        data_dir.mkdir()
+        maze_dir = self.root / "maze"
+        _maze_artifacts(maze_dir)
+        np.savez(
+            data_dir / "param_state.npz",
+            birth_times=np.array([1.0, 0.0, 0.0]),
+            simulation_time=2.0,
+            resume_step=2,
+        )
+        _write_snapshot(data_dir, 0, 0.0, [(1, 1), (2, 1), (1, 1)])
+        _write_snapshot(data_dir, 1, 1.0, [(1, 1), (2, 1), (np.nan, np.nan)])
+        _write_snapshot(data_dir, 2, 2.0, [(2, 1), (2, 1), (3, 1)])
+
+        events, summary = analysis.analyze(data_dir, maze_dir, shot_id="shot_000")
+        by_id = {row["particle_id"]: row for row in summary}
+
+        self.assertEqual([(row["particle_id"], row["decision"]) for row in events], [(0, "correct")])
+        self.assertEqual(by_id[0]["correct_junctions"], 1)
+        self.assertEqual(by_id[0]["success_fraction"], 1.0)
+        self.assertEqual(by_id[1]["decided_junctions"], 0)
+        self.assertEqual(by_id[2]["decided_junctions"], 0)
+
+    def test_nonmonotonic_snapshot_times_are_processed_chronologically(self):
+        data_dir = self.root / "shot_000"
+        data_dir.mkdir()
+        maze_dir = self.root / "maze"
+        _maze_artifacts(maze_dir)
+        np.savez(data_dir / "param_state.npz", birth_times=np.array([0.0]), simulation_time=2.0)
+        _write_snapshot(data_dir, 0, 0.0, [(1, 1)])
+        _write_snapshot(data_dir, 50, 2.0, [(3, 1)])
+        _write_snapshot(data_dir, 100, 1.0, [(2, 1)])
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            events, summary = analysis.analyze(data_dir, maze_dir)
+
+        self.assertEqual([row["decision"] for row in events], ["correct"])
+        self.assertEqual(summary[0]["success_fraction"], 1.0)
+
+    def test_birth_time_bins_average_particle_fractions_across_shots(self):
+        bins = analysis.BirthTimeBins(0.01)
+        bins.add(
+            [
+                {"shot": "shot_000", "birth_time": 6.0, "success_fraction": 0.9},
+                {"shot": "shot_001", "birth_time": 6.0, "success_fraction": 0.8},
+            ]
+        )
+        bins.add(
+            [
+                {"shot": "shot_002", "birth_time": 6.004, "success_fraction": 0.6},
+                {"shot": "shot_002", "birth_time": 6.02, "success_fraction": 0.25},
+            ]
+        )
+
+        summaries = bins.rows()
+        first_bin = summaries[0]
+
+        self.assertEqual(first_bin["particle_count"], 3)
+        self.assertEqual(first_bin["shot_count"], 3)
+        self.assertAlmostEqual(first_bin["mean_success_fraction"], (0.9 + 0.8 + 0.6) / 3)
+        self.assertEqual(summaries[1]["particle_count"], 1)
+
+    def test_run_directory_cli_averages_all_shot_particle_fractions(self):
+        run_dir = self.root / "series" / "run_c0000"
+        maze_dir = self.root / "maze"
+        output_dir = self.root / "results"
+        _maze_artifacts(maze_dir)
+        for shot, terminal_col in ((0, 2), (1, 3)):
+            shot_dir = run_dir / f"shot_{shot:03d}"
+            shot_dir.mkdir(parents=True)
+            np.savez(
+                shot_dir / "param_state.npz",
+                birth_times=np.array([0.0]),
+                simulation_time=1.0,
+                resume_step=1,
+            )
+            _write_snapshot(shot_dir, 0, 0.0, [(1, 1)])
+            _write_snapshot(shot_dir, 1, 1.0, [(terminal_col, 1)])
+
+        with patch(
+            "sys.argv",
+            [
+                "particle_decision_analysis.py",
+                "--data-dir", str(run_dir),
+                "--maze-analysis-dir", str(maze_dir),
+                "--output-dir", str(output_dir),
+                "--birth-bin-width", "0.01",
+            ],
+        ):
+            analysis.main()
+
+        with (output_dir / "birth_time_summary.csv").open(encoding="utf-8") as result_file:
+            summary = next(csv.DictReader(result_file))
+        with (output_dir / "particle_success.csv").open(encoding="utf-8") as particle_file:
+            particles = list(csv.DictReader(particle_file))
+
+        self.assertEqual(len(particles), 2)
+        self.assertEqual(summary["particle_count"], "2")
+        self.assertEqual(summary["shot_count"], "2")
+        self.assertEqual(float(summary["mean_success_fraction"]), 0.5)
+        self.assertTrue((output_dir / "success_vs_birth_time.png").is_file())
 
 
 if __name__ == "__main__":

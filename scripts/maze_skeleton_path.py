@@ -11,11 +11,6 @@ from __future__ import annotations
 import heapq
 from pathlib import Path
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib
-
 import matplotlib
 
 matplotlib.use("Agg")
@@ -43,67 +38,10 @@ COST_EPS = 0.5
 COST_P = 2.5
 SNAP_RADIUS = 12.0
 
-ZONE_DISTANCES = {
-    "J01": {"before": 8, "correct": 10, "wrong": 8},
-    "J02": {"before": 6, "correct": 12, "wrong": 7},
-}
-DEFAULT_ZONE_DISTANCE = {"before": 8, "correct": 10, "wrong": 8}
-
-
 def analysis_dir_for_maze(maze_path: str | Path) -> Path:
     """Return a per-maze directory for persisted analysis artifacts."""
     base_path = Path(maze_path)
     return base_path.parent / f"{base_path.stem}_analysis"
-
-
-def normalize_zone_cfg(raw_cfg: object) -> dict[str, int]:
-    """Normalize a user-editable zone config dictionary onto the allowed keys."""
-    cfg = dict(DEFAULT_ZONE_DISTANCE)
-    if not isinstance(raw_cfg, dict):
-        return cfg
-    for key in ("before", "correct", "wrong"):
-        value = raw_cfg.get(key, DEFAULT_ZONE_DISTANCE[key])
-        try:
-            cfg[key] = int(value)
-        except (TypeError, ValueError):
-            cfg[key] = int(DEFAULT_ZONE_DISTANCE[key])
-    return cfg
-
-
-def load_zone_config(config_path: Path, junction_ids: list[str]) -> dict[str, dict[str, int]]:
-    """Load per-junction distances, preserving existing values and filling defaults."""
-    config: dict[str, dict[str, int]] = {}
-    if config_path.exists():
-        try:
-            loaded = tomllib.loads(config_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                config = {jid: normalize_zone_cfg(loaded.get(jid)) for jid in loaded if isinstance(jid, str)}
-        except (tomllib.TOMLDecodeError, OSError):
-            config = {}
-
-    final: dict[str, dict[str, int]] = {}
-    for junction_id in junction_ids:
-        final[junction_id] = normalize_zone_cfg(config.get(junction_id, DEFAULT_ZONE_DISTANCE))
-    for extra_key, value in sorted(config.items()):
-        if extra_key not in final:
-            final[extra_key] = normalize_zone_cfg(value)
-    return final
-
-
-def write_zone_config(config_path: Path, zone_cfg: dict[str, dict[str, int]]) -> None:
-    """Persist user-editable decision-zone distances as TOML."""
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        "# User-editable decision-zone distances for each junction.",
-        "# Adjust values and rerun the script to regenerate masks and plots.",
-        "",
-    ]
-    for junction_id in sorted(zone_cfg):
-        lines.append(f"[{junction_id}]")
-        for key in ("before", "correct", "wrong"):
-            lines.append(f"{key} = {int(zone_cfg[junction_id].get(key, DEFAULT_ZONE_DISTANCE[key]))}")
-        lines.append("")
-    config_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def save_zone_masks(mask_path: Path, zones: dict[str, dict[str, set[tuple[int, int]]]], shape: tuple[int, int]) -> None:
@@ -136,11 +74,14 @@ def save_metadata(metadata_path: Path, maze_path: Path, maze_data: dict, path_ce
         f'goal_grid = [{goal_grid[0]}, {goal_grid[1]}]',
         f'plot_path = "{str(output_plot)}"',
         "",
-        "[[junctions]]",
     ]
 
     for junction in junctions:
         center = junction["center"]
+        neighbors = [
+            f"[{int(row)}, {int(col)}]"
+            for row, col in junction.get("neighbors", [])
+        ]
         lines.extend([
             "",
             "[[junctions]]",
@@ -149,7 +90,7 @@ def save_metadata(metadata_path: Path, maze_path: Path, maze_data: dict, path_ce
             f'path_index = {int(junction.get("path_index", 0))}',
             f'branch_count = {int(junction.get("branch_count", 0))}',
             f'kind = "{junction.get("kind", "Y")}"',
-            f'neighbors = {list(junction.get("neighbors", []))}',  # TODO dont let neigbors break the TOML syntax
+            f'neighbors = [{", ".join(neighbors)}]',
         ])
 
     metadata_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -372,108 +313,65 @@ def order_junctions_by_path(junctions: list[dict], path: list[tuple[int, int]]) 
     return ordered
 
 
-def branch_mask(center, target, graph, skeleton, max_steps):
-    """Return a small local branch neighborhood up to max_steps cells from center."""
-    if center == target:
-        return {center}
-    path = shortest_path(graph, center, target)
-    if not path:
-        return set()
-    keep = set(path[: min(len(path), max_steps + 1)])
-    expanded = set()
-    h, w = skeleton.shape
-    for cell in keep:
-        r, c = cell
-        for rr in range(max(0, r - 1), min(h, r + 2)):
-            for cc in range(max(0, c - 1), min(w, c + 2)):
-                if (rr, cc) != center:
-                    expanded.add((rr, cc))
-    return expanded
-
-
-
-ZONE_SIDE_CELLS = 5  # Odd number of grid cells per side
-
-
 def build_zones(
     junctions: list[dict],
     graph,
     skeleton: np.ndarray,
     free_mask: np.ndarray,
     path: list[tuple[int, int]],
-    zone_cfg: dict,
-    dx: float = DX,
 ) -> dict:
-    """Create square before/correct/wrong zones centered along each branch.
-
-    before: center lies `before` cells back along the incoming optimal path.
-    correct: center lies `correct` cells forward along the optimal path.
-    wrong: center lies `wrong` cells along the alternative branch.
-
-    Each square is clipped to free space. Different zones may overlap.
-    """
+    """Expand skeleton segments to full corridor width for each junction."""
     if not path:
         return {}
 
     path_set = set(path)
-    path_indices = {cell: i for i, cell in enumerate(path)}
-    half = max(0, int(ZONE_SIDE_CELLS) // 2)
     result = {}
+    nearest_indices = np.asarray(
+        ndi.distance_transform_edt(~skeleton, return_distances=False, return_indices=True),
+        dtype=np.intp,
+    )
+    nearest_rows, nearest_cols = nearest_indices[0], nearest_indices[1]
 
-    def square_mask(center, distance_cells):
-        """Return a square centered on a grid cell, clipped to free space."""
-        r, c = center
-        r0, r1 = max(0, r - half), min(free_mask.shape[0], r + half + 1)
-        c0, c1 = max(0, c - half), min(free_mask.shape[1], c + half + 1)
+    def expand_to_walls(centerline_cells):
+        """Assign each free cell to its nearest skeleton cell, then select a segment."""
+        centerline_mask = np.zeros(skeleton.shape, dtype=bool)
+        cells = [cell for cell in centerline_cells if skeleton[cell]]
+        if not cells:
+            return set()
+        rows, cols = zip(*cells)
+        centerline_mask[rows, cols] = True
+        region = free_mask & centerline_mask[nearest_rows, nearest_cols]
+        return {tuple(map(int, cell)) for cell in np.argwhere(region)}
 
-        mask = set()
-        for rr in range(r0, r1):
-            for cc in range(c0, c1):
-                if free_mask[rr, cc]:
-                    mask.add((rr, cc))
-        return mask
-
-    def trace_alternative(cluster, steps):
-        """Trace a non-optimal branch away from the junction."""
-        # Find branch edges leaving the junction cluster that are not
-        # part of the optimal path.
-        edges = sorted(
-            (u, v)
-            for u in cluster
-            for v in graph.get(u, [])
-            if v not in cluster and v not in path_set
+    def trace_wrong_branch(cluster):
+        """Follow every off-route branch from this junction through its terminal leaves."""
+        frontier = sorted(
+            neighbor
+            for cell in cluster
+            for neighbor in graph.get(cell, [])
+            if neighbor not in cluster and neighbor not in path_set
         )
-        if not edges:
-            return None
+        branch_cells = set()
+        while frontier:
+            cell = frontier.pop()
+            if cell in branch_cells or cell in cluster or cell in path_set:
+                continue
+            branch_cells.add(cell)
+            frontier.extend(
+                neighbor
+                for neighbor in graph.get(cell, [])
+                if neighbor not in branch_cells
+                and neighbor not in cluster
+                and neighbor not in path_set
+            )
+        return branch_cells
 
-        # Try each alternative edge. Follow a shortest branch path while
-        # preventing a return through the junction or onto the optimal route.
-        best_path = []
-        for _, start in edges:
-            queue = [(start, [start])]
-            seen = {start}
-            while queue:
-                node, branch_path = queue.pop(0)
-                if len(branch_path) > len(best_path):
-                    best_path = branch_path
-                if len(branch_path) >= steps:
-                    continue
-
-                for nxt in sorted(graph.get(node, [])):
-                    if nxt in seen or nxt in cluster or nxt in path_set:
-                        continue
-                    seen.add(nxt)
-                    queue.append((nxt, branch_path + [nxt]))
-
-        return best_path[min(steps - 1, len(best_path) - 1)] if best_path else None
-
+    normalized_junctions = []
     for junction in junctions:
         jid = junction["id"]
         cluster = set(junction.get("cluster", []))
         if not cluster:
             cluster = {junction["center"]}
-
-        # Anchor the junction to the closest point on the optimal path.
         path_index = min(
             range(len(path)),
             key=lambda i: min(
@@ -481,39 +379,36 @@ def build_zones(
                 for r, c in cluster
             ),
         )
+        normalized_junctions.append((path_index, junction, cluster))
 
-        cfg = zone_cfg.get(jid, DEFAULT_ZONE_DISTANCE)
-        distances = {
-            name: max(1, int(round(float(cfg.get(name, default)) / dx)))
-            for name, default in DEFAULT_ZONE_DISTANCE.items()
-        }
-
-        # Incoming and outgoing centers are measured along the ordered
-        # optimal path, not from a rounded junction-center pixel.
-        before_index = max(0, path_index - distances["before"])
-        correct_index = min(len(path) - 1, path_index + distances["correct"])
-
-        before_center = path[before_index]
-        correct_center = path[correct_index]
-
-        wrong_center = trace_alternative(cluster, distances["wrong"])
-
+    normalized_junctions.sort(key=lambda item: item[0])
+    for junction_order, (path_index, junction, cluster) in enumerate(normalized_junctions):
+        jid = junction["id"]
+        previous_index = (
+            normalized_junctions[junction_order - 1][0]
+            if junction_order
+            else 0
+        )
+        next_index = (
+            normalized_junctions[junction_order + 1][0]
+            if junction_order + 1 < len(normalized_junctions)
+            else len(path) - 1
+        )
+        before_segment = path[previous_index : path_index + 1]
+        correct_segment = path[path_index : next_index + 1]
+        wrong_segment = trace_wrong_branch(cluster)
         zones_for_junction = {
-            "before": square_mask(before_center, distances["before"]),
-            "correct": square_mask(correct_center, distances["correct"]),
-            "wrong": (
-                square_mask(wrong_center, distances["wrong"])
-                if wrong_center is not None
-                else set()
-            ),
+            "before": expand_to_walls(before_segment),
+            "correct": expand_to_walls(correct_segment),
+            "wrong": expand_to_walls(wrong_segment),
         }
 
         result[jid] = zones_for_junction
 
         print(
-            f"{jid}: before center={before_center}, "
-            f"correct center={correct_center}, "
-            f"wrong center={wrong_center}; "
+            f"{jid}: before path={previous_index}:{path_index}, "
+            f"correct path={path_index}:{next_index}, "
+            f"wrong skeleton cells={len(wrong_segment)}; "
             f"cells={ {k: len(v) for k, v in zones_for_junction.items()} }"
         )
 
@@ -671,10 +566,7 @@ def main():
     graph = build_graph(skeleton)
     # drop the last junction, as this is most likely already at the goal
     junctions = order_junctions_by_path(find_junctions(skeleton, graph), path_cells)[:-1]
-    junction_ids = [junction["id"] for junction in junctions]
-    config_path = analysis_dir / "zone_config.toml"
-    zone_cfg = load_zone_config(config_path, junction_ids)
-    zones = build_zones(junctions, graph, skeleton, free_mask, path_cells, zone_cfg, dx=DX)
+    zones = build_zones(junctions, graph, skeleton, free_mask, path_cells)
 
     for jid, masks in zones.items():
         print(
@@ -683,9 +575,6 @@ def main():
             f"correct={len(masks['correct'])}, "
             f"wrong={len(masks['wrong'])}"
         )
-
-    # Save a user-editable TOML config; changes are preserved across reruns.
-    write_zone_config(config_path, zone_cfg)
 
     output_plot = analysis_dir / "maze_decision_zones.png"
     save_zone_masks(analysis_dir / "zone_masks.npz", zones, free_mask.shape)
@@ -697,7 +586,6 @@ def main():
     print(f"Goal on route: {goal_grid} -> sim {grid_to_sim(goal_grid, free_mask.shape, DX)}")
     print(f"Path length: {len(path_cells)} cells")
     print(f"Detected junctions: {', '.join(j['id'] for j in junctions) if junctions else 'none'}")
-    print(f"Zone config: {config_path}")
     print(f"Zone summary: {list(zones.keys())}")
     print(f"Saved analysis artifacts under {analysis_dir}")
 
@@ -714,8 +602,6 @@ def main():
         "junctions": junctions,
         "zones": zones,
         "analysis_dir": str(analysis_dir),
-        "zone_config": zone_cfg,
-        "zone_config_path": str(config_path),
         "mask_path": str(analysis_dir / "zone_masks.npz"),
         "metadata_path": str(analysis_dir / "maze_metadata.toml"),
         "plot_path": str(output_plot),
