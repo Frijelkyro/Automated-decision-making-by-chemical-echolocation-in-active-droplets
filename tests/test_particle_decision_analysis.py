@@ -7,11 +7,14 @@ import unittest
 import warnings
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import patch
 
 import numpy as np
 
 from scripts import maze_skeleton_path as maze_analysis
+from scripts import compact_shot_directories as compactor
 from scripts import particle_decision_analysis as analysis
+from scripts import pack_particle_snapshots as packer
 
 
 def _write_snapshot(directory, timestep, simulation_time, positions):
@@ -147,6 +150,139 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
 
         self.assertEqual([row["decision"] for row in events], ["correct"])
         self.assertEqual(summary[0]["success_fraction"], 1.0)
+
+    def test_packed_hdf5_is_analyzable_without_raw_npz_files(self):
+        data_dir = self.root / "shot_000"
+        data_dir.mkdir()
+        maze_dir = self.root / "maze"
+        _maze_artifacts(maze_dir)
+        np.savez(data_dir / "param_state.npz", birth_times=np.array([0.0]), simulation_time=2.0)
+        _write_snapshot(data_dir, 0, 0.0, [(1, 1)])
+        _write_snapshot(data_dir, 50, 2.0, [(3, 1)])
+        _write_snapshot(data_dir, 100, 1.0, [(2, 1)])
+
+        hdf5_path = packer.pack_shot(data_dir)
+        self.assertTrue((data_dir / "part_0.npz").is_file())
+        for snapshot in data_dir.glob("part_*.npz"):
+            snapshot.unlink()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            events, summary = analysis.analyze(data_dir, maze_dir)
+
+        self.assertTrue(hdf5_path.is_file())
+        self.assertEqual([row["decision"] for row in events], ["correct"])
+        self.assertEqual(summary[0]["success_fraction"], 1.0)
+
+    def test_full_shot_compaction_preserves_all_fields_and_replaces_safely(self):
+        run_dir = self.root / "run_c0000"
+        shot_dir = run_dir / "shot_000"
+        shot_dir.mkdir(parents=True)
+        staging_root = self.root / "ssd"
+        staging_root.mkdir()
+        maze_dir = self.root / "maze"
+        _maze_artifacts(maze_dir)
+        np.savez(
+            shot_dir / "param_state.npz",
+            birth_times=np.array([0.0]),
+            simulation_time=1.0,
+            resume_step=1,
+        )
+        (shot_dir / "grid.txt").write_text("grid metadata", encoding="utf-8")
+        _write_snapshot(shot_dir, 0, 0.0, [(1, 1)])
+        _write_snapshot(shot_dir, 1, 1.0, [(2, 1)])
+        for timestep, sim_time, value in ((0, 0.0, 1.0), (1, 1.0, 2.0)):
+            np.savez(
+                shot_dir / f"conc_{timestep}.npz",
+                timestep=timestep,
+                simulation_time=sim_time,
+                concentration=np.full((3, 4), value, dtype=np.float32),
+            )
+        for timestep in (0, 1):
+            with np.load(shot_dir / f"part_{timestep}.npz") as snapshot:
+                arrays = {key: snapshot[key].copy() for key in snapshot.files}
+            arrays["custom_diagnostic"] = np.array([timestep, timestep + 10], dtype=np.int16)
+            arrays["f_wall"] = np.full((1, 2), timestep, dtype=np.float32)
+            np.savez(shot_dir / f"part_{timestep}.npz", **arrays)
+
+        final_dir = compactor._pack_one_shot(
+            shot_dir,
+            run_dir / "hdf5-packed",
+            staging_root,
+            expected_device=None,
+            replace_source=True,
+            keep_staging=False,
+            compression=None,
+            staging_reserve_bytes=0,
+            hdd_reserve_bytes=0,
+        )
+
+        self.assertFalse(shot_dir.exists())
+        self.assertTrue((final_dir / "grid.txt").is_file())
+        self.assertTrue((final_dir / "param_state.npz").is_file())
+        self.assertFalse((staging_root / "shot_000").exists())
+        with __import__("h5py").File(final_dir / "particles.h5", "r") as archive:
+            self.assertEqual(archive.attrs["complete"], True)
+            self.assertEqual(archive["custom_diagnostic"][1].tolist(), [1, 11])
+            self.assertEqual(archive["f_wall"].shape[0], 2)
+        with __import__("h5py").File(final_dir / "concentration.h5", "r") as archive:
+            self.assertEqual(archive["concentration"][1].shape, (3, 4))
+
+        events, summary = analysis.analyze(final_dir, maze_dir)
+        self.assertEqual([row["decision"] for row in events], ["correct"])
+        self.assertEqual(summary[0]["success_fraction"], 1.0)
+
+    def test_insufficient_ssd_space_leaves_hdd_source_untouched(self):
+        run_dir = self.root / "run_c0000"
+        shot_dir = run_dir / "shot_000"
+        shot_dir.mkdir(parents=True)
+        staging_root = self.root / "ssd"
+        staging_root.mkdir()
+        _write_snapshot(shot_dir, 0, 0.0, [(1, 1)])
+        np.savez(shot_dir / "conc_0.npz", timestep=0, simulation_time=0.0, concentration=np.zeros((2, 2)))
+
+        with self.assertRaises(OSError):
+            compactor._pack_one_shot(
+                shot_dir,
+                run_dir / "hdf5-packed",
+                staging_root,
+                expected_device=None,
+                replace_source=True,
+                keep_staging=False,
+                compression=None,
+                staging_reserve_bytes=10**15,
+                hdd_reserve_bytes=0,
+            )
+
+        self.assertTrue(shot_dir.is_dir())
+        self.assertFalse((run_dir / "hdf5-packed" / "shot_000").exists())
+
+    def test_copyback_failure_restores_original_hdd_shot(self):
+        run_dir = self.root / "run_c0000"
+        shot_dir = run_dir / "shot_000"
+        shot_dir.mkdir(parents=True)
+        staging_root = self.root / "ssd"
+        staging_root.mkdir()
+        _write_snapshot(shot_dir, 0, 0.0, [(1, 1)])
+        np.savez(shot_dir / "conc_0.npz", timestep=0, simulation_time=0.0, concentration=np.zeros((2, 2)))
+
+        with patch.object(compactor, "_copy_back_verified", side_effect=OSError("simulated HDD failure")):
+            with self.assertRaisesRegex(OSError, "simulated HDD failure"):
+                compactor._pack_one_shot(
+                    shot_dir,
+                    run_dir / "hdf5-packed",
+                    staging_root,
+                    expected_device=None,
+                    replace_source=True,
+                    keep_staging=True,
+                    compression=None,
+                    staging_reserve_bytes=0,
+                    hdd_reserve_bytes=0,
+                )
+
+        self.assertTrue((shot_dir / "part_0.npz").is_file())
+        self.assertTrue((shot_dir / "conc_0.npz").is_file())
+        self.assertTrue((staging_root / "shot_000" / "source" / "part_0.npz").is_file())
 
     def test_birth_time_bins_average_particle_fractions_across_shots(self):
         bins = analysis.BirthTimeBins(0.01)

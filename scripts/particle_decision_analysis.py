@@ -8,9 +8,12 @@ import re
 import warnings
 from collections import defaultdict
 from pathlib import Path
+from typing import Callable, cast
 
 import matplotlib.pyplot as plt
+import h5py
 import numpy as np
+from tqdm import tqdm
 
 
 def load_maze(directory):
@@ -61,15 +64,94 @@ def load_birth_times(directory):
     return {i: float(t) for i, t in enumerate(birth_times)}
 
 
-def analyze(data_dir, maze_dir, shot_id=None):
-    shape, dx, zones = load_maze(maze_dir)
+def analyze(data_dir, maze_dir=None, shot_id=None, maze_data=None, show_progress=False):
+    shape, dx, zones = maze_data if maze_data is not None else load_maze(maze_dir)
     birth_times = load_birth_times(data_dir)
+    hdf5_candidates = (
+        Path(data_dir) / "particles_analysis.h5",
+        Path(data_dir) / "particles.h5",
+    )
+    hdf5_path = next((path for path in hdf5_candidates if path.is_file()), hdf5_candidates[0])
+    hdf5_handle: h5py.File | None = None
+    h5_x: h5py.Dataset | None = None
+    h5_y: h5py.Dataset | None = None
+    h5_ids: h5py.Dataset | None = None
+    h5_timestep: h5py.Dataset | None = None
+    h5_time: h5py.Dataset | None = None
+    static_particle_ids = None
     paths = []
     for path in Path(data_dir).glob("part_*.npz"):
         match = re.fullmatch(r"part_(\d+)\.npz", path.name)
         if match:
             paths.append((int(match.group(1)), path))
     paths = [path for _, path in sorted(paths)]
+    hdf5_handle = None
+    if hdf5_path.is_file():
+        hdf5_handle = h5py.File(hdf5_path, "r")
+        if hdf5_handle.attrs.get("format") not in {
+            "particle-decision-analysis-v1",
+            "full-shot-hdf5-v1",
+        }:
+            hdf5_handle.close()
+            raise ValueError(f"Unsupported HDF5 particle format in {hdf5_path}")
+        if not hdf5_handle.attrs.get("complete", False):
+            hdf5_handle.close()
+            raise ValueError(f"HDF5 particle file is incomplete: {hdf5_path}")
+        required = {"x", "y", "particle_ids", "timestep", "simulation_time"}
+        if not required.issubset(hdf5_handle.keys()):
+            hdf5_handle.close()
+            raise ValueError(f"HDF5 particle file is missing datasets: {', '.join(sorted(required - set(hdf5_handle.keys())))}")
+        h5_x = cast(h5py.Dataset, hdf5_handle["x"])
+        h5_y = cast(h5py.Dataset, hdf5_handle["y"])
+        h5_ids = cast(h5py.Dataset, hdf5_handle["particle_ids"])
+        h5_timestep = cast(h5py.Dataset, hdf5_handle["timestep"])
+        h5_time = cast(h5py.Dataset, hdf5_handle["simulation_time"])
+        frame_count = len(h5_time)
+        if any(len(dataset) != frame_count for dataset in (h5_x, h5_y, h5_timestep)):
+            hdf5_handle.close()
+            raise ValueError(f"HDF5 datasets have inconsistent frame counts in {hdf5_path}")
+        ids_shape = h5_ids.shape
+        if len(ids_shape) not in (1, 2) or ids_shape[-1] != h5_x.shape[-1]:
+            hdf5_handle.close()
+            raise ValueError(f"Invalid particle_ids dataset shape in {hdf5_path}")
+        if len(ids_shape) == 2 and ids_shape[0] != frame_count:
+            hdf5_handle.close()
+            raise ValueError(f"Per-frame particle IDs have an inconsistent frame count in {hdf5_path}")
+        static_particle_ids = h5_ids[:] if len(ids_shape) == 1 else None
+        paths = range(frame_count)
+        if not frame_count:
+            hdf5_handle.close()
+            raise ValueError(f"HDF5 particle file contains no snapshots: {hdf5_path}")
+
+        def read_hdf5_frame(frame_index: int):
+            return (
+                h5_x[frame_index],
+                h5_y[frame_index],
+                static_particle_ids if static_particle_ids is not None else h5_ids[frame_index],
+                float(h5_time[frame_index]),
+                int(h5_timestep[frame_index]),
+            )
+
+    else:
+        def read_npz_snapshot(path: Path):
+            with np.load(path) as data:
+                x = np.asarray(data["x"])
+                y = np.asarray(data["y"])
+                ids = np.asarray(data["particle_ids"] if "particle_ids" in data else np.arange(len(x)))
+                time = float(data["simulation_time"])
+                timestep = int(data["timestep"]) if "timestep" in data else int(path.stem[5:])
+                return x, y, ids, time, timestep
+
+
+    def read_snapshot(locator: Path | int):
+        if hdf5_handle is not None:
+            if not isinstance(locator, int):
+                raise TypeError(f"Expected an HDF5 frame index, got {locator!r}")
+            return read_hdf5_frame(locator)
+        if not isinstance(locator, Path):
+            raise TypeError(f"Expected an NPZ path, got {locator!r}")
+        return read_npz_snapshot(locator)
+
     if not paths:
         raise ValueError(f"No part_<timestep>.npz snapshots found in {data_dir}")
 
@@ -78,7 +160,7 @@ def analyze(data_dir, maze_dir, shot_id=None):
     before_masks = np.stack([zones[junction]["before"] for junction in junction_ids])
     correct_masks = np.stack([zones[junction]["correct"] for junction in junction_ids])
     wrong_masks = np.stack([zones[junction]["wrong"] for junction in junction_ids])
-    def process_paths(ordered_paths, verify_order):
+    def process_paths(ordered_paths, verify_order, description, read_snapshot):
         particles = []
         id_to_slot = {}
         state = {
@@ -110,86 +192,95 @@ def analyze(data_dir, maze_dir, shot_id=None):
                 (state["first_decision"], np.zeros((len(new_ids), junction_count), dtype=np.int8))
             )
 
-        for path in ordered_paths:
-            with np.load(path) as data:
-                x = np.asarray(data["x"], dtype=float)
-                y = np.asarray(data["y"], dtype=float)
-                if x.ndim != 1 or y.shape != x.shape:
-                    raise ValueError(f"Invalid position arrays in {path}")
-                ids = np.asarray(data["particle_ids"] if "particle_ids" in data else np.arange(len(x)))
-                if ids.shape != x.shape:
-                    raise ValueError(f"Particle ID count does not match positions in {path}")
-                time = float(data["simulation_time"])
-                timestep = int(data["timestep"]) if "timestep" in data else int(path.stem[5:])
-                sort_key = (time, timestep)
-                if verify_order and previous_key is not None and sort_key < previous_key:
-                    return None
-                previous_key = sort_key
+        snapshot_progress = tqdm(
+            ordered_paths,
+            total=len(ordered_paths),
+            desc=description,
+            unit="file",
+            dynamic_ncols=True,
+            leave=False,
+            disable=not show_progress,
+        )
+        for path in snapshot_progress:
+            if not isinstance(path, (Path, int)):
+                raise TypeError(f"Unexpected snapshot locator: {path!r}")
+            x, y, ids, time, timestep = read_snapshot(path)
+            x = np.asarray(x, dtype=float)
+            y = np.asarray(y, dtype=float)
+            ids = np.asarray(ids)
+            if x.ndim != 1 or y.shape != x.shape:
+                raise ValueError(f"Invalid position arrays in {path}")
+            if ids.shape != x.shape:
+                raise ValueError(f"Particle ID count does not match positions in {path}")
+            sort_key = (time, timestep)
+            if verify_order and previous_key is not None and sort_key < previous_key:
+                return None
+            previous_key = sort_key
 
-                ensure_ids(ids)
-                slots = np.fromiter((id_to_slot[int(pid)] for pid in ids), dtype=int, count=len(ids))
-                finite = np.isfinite(x) & np.isfinite(y)
-                state["retired"][slots[~finite]] = True
-                born = state["birth_times"][slots] <= time
-                eligible = finite & born & ~state["retired"][slots]
-                eligible_indices = np.flatnonzero(eligible)
-                if not len(eligible_indices):
-                    continue
+            ensure_ids(ids)
+            slots = np.fromiter((id_to_slot[int(pid)] for pid in ids), dtype=int, count=len(ids))
+            finite = np.isfinite(x) & np.isfinite(y)
+            state["retired"][slots[~finite]] = True
+            born = state["birth_times"][slots] <= time
+            eligible = finite & born & ~state["retired"][slots]
+            eligible_indices = np.flatnonzero(eligible)
+            if not len(eligible_indices):
+                continue
 
-                eligible_slots = slots[eligible_indices]
-                cols = np.rint(x[eligible_indices] / dx).astype(int)
-                rows = shape[0] - 1 - np.rint(y[eligible_indices] / dx).astype(int)
-                inside_grid = (
-                    (rows >= 0) & (rows < shape[0]) & (cols >= 0) & (cols < shape[1])
-                )
-                inside_before = np.zeros((len(eligible_indices), junction_count), dtype=bool)
-                if inside_grid.any():
-                    inside_before[inside_grid] = before_masks[:, rows[inside_grid], cols[inside_grid]].T
-                was_open = state["open"][eligible_slots].copy()
-                entered_before = inside_before & ~state["previous_before"][eligible_slots]
-                state["previous_before"][eligible_slots] = inside_before
-                state["open"][eligible_slots] |= (~was_open & entered_before)
+            eligible_slots = slots[eligible_indices]
+            cols = np.rint(x[eligible_indices] / dx).astype(int)
+            rows = shape[0] - 1 - np.rint(y[eligible_indices] / dx).astype(int)
+            inside_grid = (
+                (rows >= 0) & (rows < shape[0]) & (cols >= 0) & (cols < shape[1])
+            )
+            inside_before = np.zeros((len(eligible_indices), junction_count), dtype=bool)
+            if inside_grid.any():
+                inside_before[inside_grid] = before_masks[:, rows[inside_grid], cols[inside_grid]].T
+            was_open = state["open"][eligible_slots].copy()
+            entered_before = inside_before & ~state["previous_before"][eligible_slots]
+            state["previous_before"][eligible_slots] = inside_before
+            state["open"][eligible_slots] |= (~was_open & entered_before)
 
-                query_targets = was_open & inside_grid[:, np.newaxis]
-                target_particles, target_junctions = np.where(query_targets)
-                previous_correct = state["previous_correct"][eligible_slots].copy()
-                previous_wrong = state["previous_wrong"][eligible_slots].copy()
-                previous_correct[~query_targets] = False
-                previous_wrong[~query_targets] = False
-                state["previous_correct"][eligible_slots] = previous_correct
-                state["previous_wrong"][eligible_slots] = previous_wrong
+            query_targets = was_open & inside_grid[:, np.newaxis]
+            target_particles, target_junctions = np.where(query_targets)
+            previous_correct = state["previous_correct"][eligible_slots].copy()
+            previous_wrong = state["previous_wrong"][eligible_slots].copy()
+            previous_correct[~query_targets] = False
+            previous_wrong[~query_targets] = False
+            state["previous_correct"][eligible_slots] = previous_correct
+            state["previous_wrong"][eligible_slots] = previous_wrong
 
-                if len(target_particles):
-                    target_slots = eligible_slots[target_particles]
-                    target_rows = rows[target_particles]
-                    target_cols = cols[target_particles]
-                    inside_correct = correct_masks[target_junctions, target_rows, target_cols]
-                    inside_wrong = wrong_masks[target_junctions, target_rows, target_cols]
-                    entered_correct = inside_correct & ~previous_correct[target_particles, target_junctions]
-                    entered_wrong = inside_wrong & ~previous_wrong[target_particles, target_junctions]
-                    ambiguous = inside_correct & inside_wrong
-                    succeeded = entered_correct & ~entered_wrong & ~ambiguous
-                    failed = entered_wrong & ~entered_correct & ~ambiguous
-                    state["previous_correct"][target_slots, target_junctions] = inside_correct
-                    state["previous_wrong"][target_slots, target_junctions] = inside_wrong
+            if len(target_particles):
+                target_slots = eligible_slots[target_particles]
+                target_rows = rows[target_particles]
+                target_cols = cols[target_particles]
+                inside_correct = correct_masks[target_junctions, target_rows, target_cols]
+                inside_wrong = wrong_masks[target_junctions, target_rows, target_cols]
+                entered_correct = inside_correct & ~previous_correct[target_particles, target_junctions]
+                entered_wrong = inside_wrong & ~previous_wrong[target_particles, target_junctions]
+                ambiguous = inside_correct & inside_wrong
+                succeeded = entered_correct & ~entered_wrong & ~ambiguous
+                failed = entered_wrong & ~entered_correct & ~ambiguous
+                state["previous_correct"][target_slots, target_junctions] = inside_correct
+                state["previous_wrong"][target_slots, target_junctions] = inside_wrong
 
-                    for event_index in np.flatnonzero(succeeded | failed):
-                        slot = int(target_slots[event_index])
-                        junction_index = int(target_junctions[event_index])
-                        decision = "correct" if succeeded[event_index] else "wrong"
-                        local_events.append(
-                            {
-                                "shot": shot_id,
-                                "particle_id": particles[slot],
-                                "birth_time": float(state["birth_times"][slot]),
-                                "junction_id": junction_ids[junction_index],
-                                "decision_time": time,
-                                "decision": decision,
-                            }
-                        )
-                        if state["first_decision"][slot, junction_index] == 0:
-                            state["first_decision"][slot, junction_index] = 1 if decision == "correct" else -1
-                        state["open"][slot, junction_index] = False
+                for event_index in np.flatnonzero(succeeded | failed):
+                    slot = int(target_slots[event_index])
+                    junction_index = int(target_junctions[event_index])
+                    decision = "correct" if succeeded[event_index] else "wrong"
+                    local_events.append(
+                        {
+                            "shot": shot_id,
+                            "particle_id": particles[slot],
+                            "birth_time": float(state["birth_times"][slot]),
+                            "junction_id": junction_ids[junction_index],
+                            "decision_time": time,
+                            "decision": decision,
+                        }
+                    )
+                    if state["first_decision"][slot, junction_index] == 0:
+                        state["first_decision"][slot, junction_index] = 1 if decision == "correct" else -1
+                    state["open"][slot, junction_index] = False
 
         summary = []
         for slot, particle_id in enumerate(particles):
@@ -209,23 +300,50 @@ def analyze(data_dir, maze_dir, shot_id=None):
             )
         return local_events, summary
 
-    result = process_paths(paths, verify_order=True)
-    if result is None:
-        warnings.warn(
-            f"Stored simulation times are not ordered by timestep in {data_dir}; "
-            "retrying with physical-time sorting.",
-            RuntimeWarning,
+    try:
+        if show_progress:
+            source_format = "HDF5" if hdf5_handle is not None else "NPZ"
+            tqdm.write(
+                f"[start] {shot_id or Path(data_dir).name}: {len(paths):,} {source_format} snapshots, "
+                f"{junction_count} junctions, {len(birth_times):,} saved birth times"
+            )
+        result = process_paths(
+            paths,
+            verify_order=True,
+            description=f"{shot_id or Path(data_dir).name} snapshots",
+            read_snapshot=read_snapshot,
         )
-        metadata = []
-        for path in paths:
-            try:
-                with np.load(path) as data:
-                    time = float(data["simulation_time"])
-                    timestep = int(data["timestep"]) if "timestep" in data else int(path.stem[5:])
-                    metadata.append((time, timestep, path))
-            except (OSError, ValueError, KeyError) as error:
-                warnings.warn(f"Skipping incomplete snapshot {path}: {error}", RuntimeWarning)
-        result = process_paths([item[2] for item in sorted(metadata)], verify_order=False)
+        if result is None:
+            tqdm.write(
+                f"[retry] {shot_id or Path(data_dir).name}: snapshot times are not ordered by timestep; "
+                "restarting in physical-time order"
+            )
+            if hdf5_handle is not None:
+                times = cast(h5py.Dataset, hdf5_handle["simulation_time"])[:]
+                timesteps = cast(h5py.Dataset, hdf5_handle["timestep"])[:]
+                ordered_paths = sorted(range(len(times)), key=lambda index: (times[index], timesteps[index]))
+            else:
+                metadata = []
+                for path in paths:
+                    if not isinstance(path, Path):
+                        raise TypeError(f"Expected an NPZ path, got {path!r}")
+                    try:
+                        with np.load(path) as data:
+                            time = float(data["simulation_time"])
+                            timestep = int(data["timestep"]) if "timestep" in data else int(path.stem[5:])
+                            metadata.append((time, timestep, path))
+                    except (OSError, ValueError, KeyError) as error:
+                        warnings.warn(f"Skipping incomplete snapshot {path}: {error}", RuntimeWarning)
+                ordered_paths = [item[2] for item in sorted(metadata)]
+            result = process_paths(
+                ordered_paths,
+                verify_order=False,
+                description=f"{shot_id or Path(data_dir).name} time-order retry",
+                read_snapshot=read_snapshot,
+            )
+    finally:
+        if hdf5_handle is not None:
+            hdf5_handle.close()
     if result is None:
         raise RuntimeError(f"Could not order particle snapshots in {data_dir}")
     events, summary = result
@@ -312,18 +430,35 @@ def main():
         parser.error("--birth-bin-width must be positive and finite")
 
     data_root = Path(args.data_dir)
-    if any(re.fullmatch(r"part_\d+\.npz", path.name) for path in data_root.glob("part_*.npz")):
+    has_hdf5 = any((data_root / name).is_file() for name in ("particles_analysis.h5", "particles.h5"))
+    has_npz = any(re.fullmatch(r"part_\d+\.npz", path.name) for path in data_root.glob("part_*.npz"))
+    if has_hdf5 or has_npz:
         shot_dirs = [data_root]
     else:
         shot_dirs = sorted(
             path for path in data_root.glob("shot_*")
-            if path.is_dir() and any(re.fullmatch(r"part_\d+\.npz", item.name) for item in path.glob("part_*.npz"))
+            if path.is_dir()
+            and (
+                any((path / name).is_file() for name in ("particles_analysis.h5", "particles.h5"))
+                or any(re.fullmatch(r"part_\d+\.npz", item.name) for item in path.glob("part_*.npz"))
+            )
         )
     if not shot_dirs:
         parser.error(f"No shot snapshots found under {data_root}")
 
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    print(f"[init] Data directory: {data_root.resolve()}", flush=True)
+    print(f"[init] Found {len(shot_dirs):,} shot director{'y' if len(shot_dirs) == 1 else 'ies'}", flush=True)
+    print(f"[init] Loading maze metadata and masks from {Path(args.maze_analysis_dir).resolve()}", flush=True)
+    maze_data = load_maze(args.maze_analysis_dir)
+    print(
+        f"[ready] Maze loaded: {maze_data[0][0]}x{maze_data[0][1]} grid, "
+        f"dx={maze_data[1]:g}, {len(maze_data[2])} junctions",
+        flush=True,
+    )
+    print(f"[ready] Output directory: {output.resolve()}", flush=True)
+    print("[start] Processing snapshots; progress bars show files/s and ETA.", flush=True)
     event_fields = ["run_id", "shot", "particle_id", "birth_time", "junction_id", "decision_time", "decision"]
     summary_fields = [
         "run_id", "shot", "particle_id", "birth_time", "total_junctions", "decided_junctions",
@@ -338,12 +473,17 @@ def main():
         particle_writer = csv.DictWriter(particle_file, fieldnames=summary_fields)
         event_writer.writeheader()
         particle_writer.writeheader()
-        for shot_dir in shot_dirs:
+        for shot_dir in tqdm(shot_dirs, desc="Shots", unit="shot", dynamic_ncols=True):
             shot_id = shot_dir.name if re.fullmatch(r"shot_\d+", shot_dir.name) else "shot_000"
             try:
-                events, summary = analyze(shot_dir, args.maze_analysis_dir, shot_id=shot_id)
+                events, summary = analyze(
+                    shot_dir,
+                    shot_id=shot_id,
+                    maze_data=maze_data,
+                    show_progress=True,
+                )
             except (OSError, ValueError, KeyError) as error:
-                warnings.warn(f"Skipping incomplete shot {shot_dir}: {error}", RuntimeWarning)
+                tqdm.write(f"[skip] Incomplete shot {shot_dir}: {error}")
                 continue
             run_id = shot_dir.parent.name if shot_dir.name.startswith("shot_") else shot_dir.name
             for row in events:
@@ -357,6 +497,9 @@ def main():
             bins.add(summary)
             event_count += len(events)
             particle_count += len(summary)
+            tqdm.write(
+                f"[done] {shot_id}: {len(summary):,} particles, {len(events):,} decisions"
+            )
 
     binned_summary = bins.rows()
     write_csv(
