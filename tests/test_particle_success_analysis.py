@@ -1,0 +1,138 @@
+import math
+import numpy as np
+import pytest
+
+from scripts.particle_success_fraction_analysis import (
+    load_maze_oriented,
+    centerline_path,
+    index_shot,
+    score_shot,
+)
+
+
+@pytest.fixture
+def simple_maze_file(tmp_path):
+    raw = np.zeros((100, 100), dtype=int)
+    raw[0, :] = 1
+    raw[-1, :] = 1
+    raw[:, 0] = 1
+    raw[:, -1] = 1
+    file_path = tmp_path / "maze.tsv"
+    np.savetxt(file_path, raw, delimiter="\t", fmt="%d")
+    return file_path
+
+
+def test_load_maze_oriented_and_path(simple_maze_file):
+    start = (2, 2)
+    end = (75, 75)
+    maze = load_maze_oriented(simple_maze_file, start=start, end=end)
+    assert maze.shape == (100, 100)
+    assert maze[start] == 1
+    assert maze[end] == 1
+    path = centerline_path(maze, start, end, wall_weight=30.0, wall_power=2.0)
+    assert len(path) > 0
+
+
+def test_index_shot_uses_simulation_time(tmp_path):
+    shot = tmp_path / "shot_000"
+    shot.mkdir()
+    np.savez(shot / "part_000.npz", simulation_time=1.0, timestep=100, x=np.array([2.0]), y=np.array([81.0]))
+    np.savez(shot / "part_010.npz", simulation_time=3.0, timestep=110, x=np.array([2.0]), y=np.array([81.0]))
+    idx = index_shot(shot)
+    assert [entry["simulation_time"] for entry in idx] == [1.0, 3.0]
+    assert [entry["timestep"] for entry in idx] == [100, 110]
+
+
+def test_score_shot_handles_nonuniform_and_exit_inside_interval(tmp_path):
+    shot = tmp_path / "shot_000"
+    shot.mkdir()
+    start = (2, 2)
+    end = (8, 8)
+    raw = np.zeros((20, 20), dtype=int)
+    raw[0, :] = 1
+    raw[-1, :] = 1
+    raw[:, 0] = 1
+    raw[:, -1] = 1
+    path = np.array([start, (3, 2), (5, 4), end], dtype=float)
+    file_path = tmp_path / "maze.tsv"
+    np.savetxt(file_path, raw, delimiter="\t", fmt="%d")
+
+    np.savez(shot / "part_000.npz", simulation_time=1.0, timestep=1, x=np.array([2.0]), y=np.array([2.0]))
+    np.savez(shot / "part_001.npz", simulation_time=3.0, timestep=2, x=np.array([18.0]), y=np.array([18.0]))
+    np.savez(shot / "part_002.npz", simulation_time=5.0, timestep=3, x=np.array([18.0]), y=np.array([18.0]))
+
+    np.savez(shot / "param_state.npz", birth_times=np.array([0.0]), exit_trigger_time=np.array([4.0]))
+
+    result = score_shot(
+        shot,
+        maze=load_maze_oriented(file_path, start=start, end=end),
+        path=path,
+        tolerance=1.0,
+        logger=None,
+    )
+    assert result["rows"][0]["success_fraction"] > 0.0
+    assert result["rows"][0]["exited"] is True
+
+
+def test_score_shot_never_exited_and_birth_after_final_snapshot(tmp_path):
+    shot = tmp_path / "shot_000"
+    shot.mkdir()
+    start = (2, 2)
+    end = (8, 8)
+    raw = np.zeros((20, 20), dtype=int)
+    raw[0, :] = 1
+    raw[-1, :] = 1
+    raw[:, 0] = 1
+    raw[:, -1] = 1
+    path = np.array([start, (3, 2), end], dtype=float)
+    file_path = tmp_path / "maze.tsv"
+    np.savetxt(file_path, raw, delimiter="\t", fmt="%d")
+
+    np.savez(shot / "part_000.npz", simulation_time=1.0, timestep=1, x=np.array([2.0]), y=np.array([2.0]))
+    np.savez(shot / "part_001.npz", simulation_time=3.0, timestep=2, x=np.array([2.0]), y=np.array([2.0]))
+
+    np.savez(shot / "param_state.npz", birth_times=np.array([5.0]), exit_trigger_time=np.array([np.inf]))
+    result = score_shot(
+        shot,
+        maze=load_maze_oriented(file_path, start=start, end=end),
+        path=path,
+        tolerance=1.0,
+        logger=None,
+    )
+    row = result["rows"][0]
+    assert math.isnan(row["success_fraction"])
+
+
+def test_score_shot_case3_counts_and_nan_endpoints(tmp_path):
+    shot = tmp_path / "shot_000"
+    shot.mkdir()
+    start = (2, 2)
+    end = (8, 8)
+    raw = np.zeros((20, 20), dtype=int)
+    raw[0, :] = 1
+    raw[-1, :] = 1
+    raw[:, 0] = 1
+    raw[:, -1] = 1
+    path = np.array([start, (3, 2), (4, 2)], dtype=float)
+    file_path = tmp_path / "maze.tsv"
+    np.savetxt(file_path, raw, delimiter="\t", fmt="%d")
+    np.savez(shot / "part_000.npz", simulation_time=1.0, timestep=1, x=np.array([np.nan]), y=np.array([np.nan]))
+    np.savez(shot / "part_001.npz", simulation_time=3.0, timestep=2, x=np.array([2.0]), y=np.array([2.0]))
+    np.savez(shot / "param_state.npz", birth_times=np.array([0.0]), exit_trigger_time=np.array([5.0]))
+    result = score_shot(
+        shot,
+        maze=load_maze_oriented(file_path, start=start, end=end),
+        path=path,
+        tolerance=1.0,
+        logger=None,
+    )
+    assert result["diagnostics"]["case3_count"] >= 0
+
+
+def test_score_shot_detects_particle_length_mismatch(tmp_path):
+    shot = tmp_path / "shot_000"
+    shot.mkdir()
+    np.savez(shot / "part_000.npz", simulation_time=1.0, timestep=1, x=np.array([1.0, 2.0]), y=np.array([1.0]))
+    np.savez(shot / "param_state.npz", birth_times=np.array([0.0]), exit_trigger_time=np.array([np.inf]))
+    with pytest.raises(ValueError):
+        score_shot(shot, maze=np.ones((5, 5)), path=np.array([[0.0, 0.0]]), tolerance=1.0)
