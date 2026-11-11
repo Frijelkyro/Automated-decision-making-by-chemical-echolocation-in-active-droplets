@@ -1,21 +1,21 @@
 [series]
-name = "emission_1_reaper_6_400s"
+name = "reaper_emission_scan"
 data_root = "data"
 output_root = "output"
 
 [defaults]
-dt = 0.0005
+dt = 0.0001
 beta = -8
-grim_reaper_delay = 6.0
-desired_time = 400
-write_every = 100
+desired_time = 200
+write_every = 500
 n_steps = 100
 test_run = false
 resume_simulation = true
 
 [[regimes]]
-name = "emission_1"
-shots = 200
+name = "quadratic"
+shots = 1
 
 [regimes.grid]
-emission_rate = [1.0]
+grim_reaper_delay = [0.0, 0.2, 0.8, 1.8, 3.2, 5.0, 7.2, 9.8, 12.8, 16.2, 20.0]
+emission_rate = [0.1, 0.2, 0.5, 1.0, 1.5, 2.5, 3.5, 5.0, 6.5, 8.5, 10.0]

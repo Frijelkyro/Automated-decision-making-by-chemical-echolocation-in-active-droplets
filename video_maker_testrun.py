@@ -8,17 +8,24 @@ from matplotlib.colors import Normalize
 from tqdm import tqdm
 from time import perf_counter
 from maze_functions import maze_from_file
+import argparse
 
 print("started video rendering")
 t0 = perf_counter()
 
-DATA = "./data"
-MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet.tsv"
-# MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv"
+parser = argparse.ArgumentParser()
+parser.add_argument("--data", default="./data")
+parser.add_argument("--maze", default="./different_mazes/Ran_maze_size_prop_to_droplet.tsv")
+parser.add_argument("--frames", type=int, default=400, help="Max frames; 0 = all")
+parser.add_argument("--output", default="particle_trajectory.mp4", help="Output path and filename")
+args = parser.parse_args()
+
+DATA, MAZE = args.data, args.maze
 PARAM = os.path.join(DATA, "param.txt")
 if not os.path.isfile(PARAM):
     PARAM = PARAM.removesuffix(".txt") + "_checkpoint.txt"
 GRID = os.path.join(DATA, "grid.txt")
+
 SHOW_TRAJECTORIES = False
 troubleshoot = True
 
@@ -65,10 +72,9 @@ conc_files = {
     for f in glob.glob(os.path.join(DATA, "conc_*.npz"))
 }
 
-if troubleshoot: 
-    part_files = part_files[-400:]
-    timestamps = timestamps[-400:]
-    # print(conc_files)
+if args.frames:
+    part_files = part_files[-args.frames:]
+    timestamps = timestamps[-args.frames:]
 
 if not timestamps:
     raise RuntimeError("No particle NPZ files found.")
@@ -252,10 +258,7 @@ writer = animation.FFMpegWriter(
     ],
 )
 
-out = os.path.join(
-    DATA,
-    "particle_trajectory.mp4",
-)
+out = os.path.join(DATA, "particle_trajectory.mp4")
 
 # Render
 with writer.saving(
@@ -272,10 +275,8 @@ with writer.saving(
         update(i)
         writer.grab_frame()
 
-shutil.copy(
-    out,
-    "particle_trajectory.mp4",
-)
+os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+shutil.copy(out, args.output)
 
 elapsed = perf_counter() - t0
 

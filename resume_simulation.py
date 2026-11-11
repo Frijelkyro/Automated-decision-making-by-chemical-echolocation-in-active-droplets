@@ -70,7 +70,14 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
     num_particles = int(old["num_particles"])
     conc_prefix = str(old["file_prefix_conc"])
     part_prefix = str(old["file_prefix_part"])
-
+    
+    # Fall back to the current job's paths if the saved paths don't exist.
+    if not os.path.exists(f"{conc_prefix}_{resume_step}.npz"):
+        conc_prefix = os.path.join(data, os.path.basename(conc_prefix))
+    
+    if not os.path.exists(f"{part_prefix}_{resume_step}.npz"):
+        part_prefix = os.path.join(data, os.path.basename(part_prefix))
+    
     for prefix in (conc_prefix, part_prefix):
         prefix = os.path.basename(prefix)
         for filename in os.listdir(data):

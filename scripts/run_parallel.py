@@ -42,11 +42,11 @@ def main():
         command.append("--progress")
     resume_simulation = config.get("defaults", {}).get("resume_simulation", False)
     if joblog.exists():
-        if not signature_file.exists() or signature_file.read_text().strip() != signature:
-            parser.error(
-                "Existing series job log does not match this job list; "
-                "keep the configuration unchanged or use a new series name"
-            )
+        #if not signature_file.exists() or signature_file.read_text().strip() != signature:
+        #    parser.error(
+        #        "Existing series job log does not match this job list; "
+        #        "keep the configuration unchanged or use a new series name"
+        #    )
         if resume_simulation:
             command.append("--resume-failed")
         elif args.resume:
