@@ -488,34 +488,54 @@ def _parse_particle_success_file(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _summarize_birth_times(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[float, dict[str, Any]] = {}
+    for row in rows:
+        birth_time = float(row["birth_time"])
+        success_fraction = float(row["success_fraction"])
+        if not math.isfinite(birth_time) or not math.isfinite(success_fraction):
+            continue
+        group = groups.setdefault(birth_time, {"sum": 0.0, "count": 0, "shots": set()})
+        group["sum"] += success_fraction
+        group["count"] += 1
+        if row.get("shot") is not None:
+            group["shots"].add(row["shot"])
+
+    return [
+        {
+            "birth_time": birth_time,
+            "mean_success_fraction": group["sum"] / group["count"],
+            "particle_count": group["count"],
+            "shot_count": len(group["shots"]),
+        }
+        for birth_time, group in sorted(groups.items())
+    ]
+
+
 def plot_configuration(
     run_id: str,
     shot_rows: dict[int, list[dict[str, Any]]],
     output_path: str | Path,
     logger_obj: logging.Logger | None = None,
 ) -> None:
-    """Plot per-shot success fractions for one configuration."""
+    """Plot mean success fraction by birth time for one configuration."""
     log = _ensure_logger(logger_obj)
     fig, ax = plt.subplots(figsize=(10, 5))
-    valid_points = 0
-    excluded_nan = 0
-
-    for shot_index, rows in sorted(shot_rows.items()):
-        xs = np.asarray([int(row["particle_id"]) for row in rows], dtype=int)
-        ys = np.asarray([float(row["success_fraction"]) for row in rows], dtype=float)
-        finite = np.isfinite(ys)
-        if np.any(finite):
-            ax.plot(xs[finite], ys[finite], "o", markersize=3, label=f"shot_{shot_index:03d}")
-            valid_points += int(np.count_nonzero(finite))
-        excluded_nan += int(np.count_nonzero(~finite))
+    rows = [dict(row, shot=shot_index) for shot_index, shot_rows in shot_rows.items() for row in shot_rows]
+    summary = _summarize_birth_times(rows)
+    if summary:
+        ax.plot(
+            [row["birth_time"] for row in summary],
+            [row["mean_success_fraction"] for row in summary],
+            "o-",
+            markersize=3,
+        )
 
     ax.set_title(f"{run_id} ({len(shot_rows)} shots)")
-    ax.set_xlabel("Particle ID")
-    ax.set_ylabel("Success fraction")
+    ax.set_xlabel("Particle birth time")
+    ax.set_ylabel("Mean success fraction across shots")
     ax.set_ylim(0.0, 1.0)
     ax.grid(alpha=0.3)
-    if valid_points or excluded_nan:
-        ax.legend(title=f"Plotted {valid_points} values; excluded {excluded_nan} NaN values")
     plt.tight_layout()
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -529,6 +549,7 @@ def aggregate(series_root: str | Path, output_root: str | Path) -> tuple[list[di
     output_root = Path(output_root)
     long_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
+    birth_time_rows: list[dict[str, Any]] = []
 
     for run_dir in sorted(series_root.glob("*")):
         if not run_dir.is_dir():
@@ -564,6 +585,7 @@ def aggregate(series_root: str | Path, output_root: str | Path) -> tuple[list[di
                     "run_id": run_id,
                     "shot": shot_name,
                     "particle_id": row["particle_id"],
+                    "birth_time": row["birth_time"],
                     "success_fraction": row["success_fraction"],
                     "traversal_time": row["traversal_time"],
                     "exited": row["exited"],
@@ -572,6 +594,10 @@ def aggregate(series_root: str | Path, output_root: str | Path) -> tuple[list[di
         if shot_count == 0 or not config_particles:
             continue
 
+        birth_time_rows.extend(
+            {"series": series_root.name, "run_id": run_id, **row}
+            for row in _summarize_birth_times(config_particles)
+        )
         valid = np.asarray([float(item["success_fraction"]) for item in config_particles if np.isfinite(item["success_fraction"]) and float(item["traversal_time"]) > 0.0], dtype=float)
         mean_success = float(np.mean(valid)) if valid.size else math.nan
         sem_success = float(np.std(valid, ddof=1) / np.sqrt(valid.size)) if valid.size > 1 else math.nan
@@ -604,6 +630,15 @@ def aggregate(series_root: str | Path, output_root: str | Path) -> tuple[list[di
         )
         writer.writeheader()
         writer.writerows(summary_rows)
+
+    birth_time_path = output_root / "particle_success_by_birth_time.csv"
+    with birth_time_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=["series", "run_id", "birth_time", "mean_success_fraction", "particle_count", "shot_count"],
+        )
+        writer.writeheader()
+        writer.writerows(birth_time_rows)
 
     return long_rows, summary_rows
 
@@ -782,7 +817,7 @@ def main() -> int:
                 plot_configuration(run_id, shot_rows, output_root / series_name / run_id / "success_fraction.png", logger_obj=logger)
 
     aggregate_root = output_root / series_name
-    aggregate(aggregate_root, aggregate_root)
+    aggregate(series_root, aggregate_root)
 
     skipped_path = output_root / series_name / "skipped_shots.tsv"
     skipped_path.parent.mkdir(parents=True, exist_ok=True)
