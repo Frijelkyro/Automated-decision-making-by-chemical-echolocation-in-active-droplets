@@ -1,3 +1,4 @@
+import csv
 import math
 import numpy as np
 import pytest
@@ -6,6 +7,8 @@ from scripts.particle_success_fraction_analysis import (
     load_maze_oriented,
     centerline_path,
     index_shot,
+    aggregate,
+    plot_configuration,
     score_shot,
 )
 
@@ -136,3 +139,36 @@ def test_score_shot_detects_particle_length_mismatch(tmp_path):
     np.savez(shot / "param_state.npz", birth_times=np.array([0.0]), exit_trigger_time=np.array([np.inf]))
     with pytest.raises(ValueError):
         score_shot(shot, maze=np.ones((5, 5)), path=np.array([[0.0, 0.0]]), tolerance=1.0)
+
+
+def test_aggregate_and_plot_average_success_by_birth_time(tmp_path):
+    series = tmp_path / "data" / "batch"
+    shot_rows = {}
+    for shot_index, fractions in enumerate(((0.6, 0.8), (0.8, 0.9))):
+        shot = series / "run_c0000" / f"shot_{shot_index:03d}"
+        shot.mkdir(parents=True)
+        rows = [
+            {"particle_id": 0, "birth_time": 0.0, "success_fraction": fractions[0], "traversal_time": 1.0, "n_samples": 2, "exit_time": 2.0, "exited": True},
+            {"particle_id": 1, "birth_time": 200.0, "success_fraction": fractions[1], "traversal_time": 1.0, "n_samples": 2, "exit_time": 2.0, "exited": True},
+        ]
+        with (shot / "particle_success.txt").open("w", encoding="utf-8") as file:
+            for row in rows:
+                file.write(
+                    f"{row['particle_id']} {row['success_fraction']:.6f} 1.000000 2 "
+                    f"{row['birth_time']:.6f} 2.000000 1\n"
+                )
+        shot_rows[shot_index] = rows
+
+    output = tmp_path / "results"
+    output.mkdir()
+    aggregate(series, output)
+    with (output / "particle_success_by_birth_time.csv").open(encoding="utf-8") as file:
+        summary = list(csv.DictReader(file))
+
+    assert [float(row["birth_time"]) for row in summary] == [0.0, 200.0]
+    assert [float(row["mean_success_fraction"]) for row in summary] == pytest.approx([0.7, 0.85])
+    assert [int(row["shot_count"]) for row in summary] == [2, 2]
+
+    plot_path = output / "success_fraction.png"
+    plot_configuration("run_c0000", shot_rows, plot_path)
+    assert plot_path.is_file()
