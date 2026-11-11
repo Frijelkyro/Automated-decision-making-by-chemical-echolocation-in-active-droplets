@@ -12,7 +12,7 @@ from maze_functions import maze_from_file
 print("started video rendering")
 t0 = perf_counter()
 
-DATA = "./data"
+DATA = "./data/emission_1_reaper_6_400s/emission_1_c0000/shot_001/"
 MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet.tsv"
 # MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv"
 PARAM = os.path.join(DATA, "param.txt")
@@ -20,7 +20,7 @@ if not os.path.isfile(PARAM):
     PARAM = PARAM.removesuffix(".txt") + "_checkpoint.txt"
 GRID = os.path.join(DATA, "grid.txt")
 SHOW_TRAJECTORIES = False
-troubleshoot = True
+troubleshoot = False
 
 # Parameters
 params = {}

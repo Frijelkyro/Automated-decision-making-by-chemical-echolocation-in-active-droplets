@@ -4,7 +4,7 @@ data_root = "data"
 output_root = "output"
 
 [defaults]
-dt = 0.0005
+dt = 0.00025
 beta = -8
 grim_reaper_delay = 6.0
 desired_time = 400
