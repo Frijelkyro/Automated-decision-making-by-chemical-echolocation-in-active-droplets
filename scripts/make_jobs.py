@@ -11,6 +11,7 @@ WRAPPER = ROOT / "maze_cluster_script.py"
 PARAMETER_FLAGS = {
     "beta": "--beta",
     "dt": "--dt",
+    "maze_config": "--maze-config",
     "emission_rate": "--emission-rate",
     "grim_reaper_delay": "--grim-reaper-delay",
     "desired_time": "--desired-time",

@@ -567,12 +567,13 @@ def plot_maze(grid: np.ndarray, free_mask: np.ndarray, skeleton: np.ndarray, pat
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--maze", type=Path, default=MAZE_FILE, help="Maze TSV file to analyze.")
+    parser.add_argument("--maze", type=Path, help="Maze TSV file to analyze.")
+    parser.add_argument("--maze-config", help="Named startpoint profile from the configuration TOML.")
     parser.add_argument(
         "--startpoints-config",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "maze_startpoints_configurations.toml",
-        help="TOML file mapping maze names to emitter and static-source positions.",
+        default=Path(__file__).resolve().parents[1] / "maze_startpoints_configuration.toml",
+        help="TOML file containing maze and startpoint profiles.",
     )
     parser.add_argument("--emitter-position", "--emitter", nargs=2, type=float, metavar=("X", "Y"))
     parser.add_argument(
@@ -596,13 +597,15 @@ def load_start_positions(
     maze_path: Path,
     emitter_override: list[float] | tuple[float, float] | None = None,
     goal_override: list[float] | tuple[float, float] | None = None,
+    config_name: str | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Load configured positions for a maze, applying any CLI overrides."""
+    """Load positions from a named profile, applying any CLI overrides."""
     maze_config = {}
     if emitter_override is None or goal_override is None:
         with config_path.expanduser().open("rb") as config_file:
             configuration = tomllib.load(config_file)
-        maze_config = configuration.get("mazes", {}).get(maze_path.stem, {})
+        profile_name = config_name or maze_path.stem
+        maze_config = configuration.get("configurations", {}).get(profile_name, {})
 
     emitter = emitter_override or maze_config.get("emitter_position")
     goal = goal_override or maze_config.get("static_source_position")
@@ -628,15 +631,34 @@ def load_start_positions(
 def main(argv: list[str] | None = None):
     parser = build_argument_parser()
     args = parser.parse_args(argv)
-    path = resolve_maze_path(args.maze)
-    if not path.is_file():
-        parser.error(f"Maze file does not exist: {path}")
     config_path = args.startpoints_config.expanduser()
     if not config_path.is_absolute() and not config_path.is_file():
         config_path = Path(__file__).resolve().parents[1] / config_path
     try:
+        with config_path.open("rb") as config_file:
+            configuration = tomllib.load(config_file)
+        if args.maze_config:
+            profile_name = args.maze_config
+        elif args.maze:
+            matching_profiles = [
+                name
+                for name, profile in configuration.get("configurations", {}).items()
+                if Path(profile.get("maze_file", "")).name == args.maze.name
+            ]
+            profile_name = matching_profiles[0] if matching_profiles else args.maze.stem
+        else:
+            profile_name = MAZE_FILE.stem
+        maze_config = configuration.get("configurations", {}).get(profile_name)
+        if maze_config is None:
+            raise ValueError(f"No configuration named {profile_name!r} in {config_path}.")
+        configured_maze = maze_config.get("maze_file")
+        if args.maze is None and configured_maze is None:
+            raise ValueError(f"Configuration {profile_name!r} does not define maze_file.")
+        path = resolve_maze_path(args.maze or Path(configured_maze))
+        if not path.is_file():
+            parser.error(f"Maze file does not exist: {path}")
         emitter_position, goal_position = load_start_positions(
-            config_path, path, args.emitter_position, args.static_source_position
+            config_path, path, args.emitter_position, args.static_source_position, profile_name
         )
     except (OSError, tomllib.TOMLDecodeError, ValueError) as error:
         parser.error(str(error))

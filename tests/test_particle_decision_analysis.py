@@ -111,31 +111,54 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
     def test_start_positions_load_from_maze_config_and_allow_overrides(self):
         config_path = self.root / "startpoints.toml"
         config_path.write_text(
-            '[mazes.QJ01]\nemitter_position = [14.5, 2.5]\nstatic_source_position = [117.5, 42.5]\n',
+            '[configurations.QJ01_config0]\nemitter_position = [5.0, 11.05]\n'
+            'static_source_position = [100.2, 10.2]\n',
             encoding="utf-8",
         )
 
-        configured = maze_analysis.load_start_positions(config_path, Path("QJ01.tsv"))
+        configured = maze_analysis.load_start_positions(
+            config_path, Path("QJ01.tsv"), config_name="QJ01_config0"
+        )
         overridden = maze_analysis.load_start_positions(
-            config_path, Path("QJ01.tsv"), emitter_override=[10, 4], goal_override=[110, 40]
+            config_path,
+            Path("QJ01.tsv"),
+            emitter_override=[10, 4],
+            goal_override=[110, 40],
+            config_name="QJ01_config0",
         )
 
-        self.assertEqual(configured, ((14.5, 2.5), (117.5, 42.5)))
+        self.assertEqual(configured, ((5.0, 11.05), (100.2, 10.2)))
         self.assertEqual(overridden, ((10.0, 4.0), (110.0, 40.0)))
+
+    def test_shared_startpoint_profiles_match_simulation_initial_conditions(self):
+        config_path = Path(__file__).resolve().parents[1] / "maze_startpoints_configuration.toml"
+        profiles = tomllib.loads(config_path.read_text(encoding="utf-8"))["configurations"]
+
+        self.assertEqual(profiles["QJ01_config0"]["emitter_position"], [5.0, 11.05])
+        self.assertEqual(profiles["QJ01_config0"]["emitter_jitter"], [0.5, 0.0])
+        self.assertEqual(profiles["QJ01_config0"]["static_source_position"], [100.2, 10.2])
+        self.assertEqual(
+            profiles["Ran_maze_size_prop_to_droplet"]["emitter_position"], [2.1, 84.1]
+        )
+        self.assertEqual(profiles["Testrun"]["maze_file"], "different_mazes/Ran_maze_size_prop_to_droplet.tsv")
+        self.assertEqual(profiles["Testrun"]["emitter_position"], [2.1, 14.8])
+        self.assertEqual(profiles["Testrun"]["static_source_position"], [42.5, 10.5])
 
     def test_maze_cli_accepts_positions_and_zone_extent(self):
         args = maze_analysis.build_argument_parser().parse_args(
             [
                 "--maze", "different_mazes/QJ01.tsv",
-                "--emitter-position", "14.5", "2.5",
-                "--static-source-position", "117.5", "42.5",
+                "--maze-config", "QJ01_config0",
+                "--emitter-position", "5.0", "11.05",
+                "--static-source-position", "100.2", "10.2",
                 "--zone-extent", "compact",
             ]
         )
 
         self.assertEqual(args.maze, Path("different_mazes/QJ01.tsv"))
-        self.assertEqual(args.emitter_position, [14.5, 2.5])
-        self.assertEqual(args.static_source_position, [117.5, 42.5])
+        self.assertEqual(args.maze_config, "QJ01_config0")
+        self.assertEqual(args.emitter_position, [5.0, 11.05])
+        self.assertEqual(args.static_source_position, [100.2, 10.2])
         self.assertEqual(args.zone_extent, "compact")
 
     def test_metadata_neighbors_are_valid_toml_integer_pairs(self):

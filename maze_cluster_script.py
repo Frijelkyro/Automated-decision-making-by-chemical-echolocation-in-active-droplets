@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import argparse
 import os
 import sys
+import tomllib
+from pathlib import Path
 import numpy as np
 from maze_functions import *
 from resume_simulation import *
@@ -35,12 +37,37 @@ parser.add_argument("--write-every", type=int, default=100)
 parser.add_argument("--n-steps", type=int, default=100)
 parser.add_argument("--num-particles", type=int, default=60)
 parser.add_argument("--test-run", type=parse_bool, default=False)
+parser.add_argument("--maze-config", help="Named maze/startpoint profile from the configuration TOML.")
+parser.add_argument(
+    "--startpoints-config",
+    type=Path,
+    default=Path(__file__).with_name("maze_startpoints_configuration.toml"),
+)
 parser.add_argument("--resume", type=parse_bool, default=False)
 parser.add_argument("--run-id", default="default")
 parser.add_argument("--shot", type=int, default=0)
 parser.add_argument("--data-dir", default="data")
 parser.add_argument("--output-dir")
 args = parser.parse_args()
+
+config_path = args.startpoints_config.expanduser()
+if not config_path.is_absolute():
+    config_path = Path(__file__).resolve().parent / config_path
+try:
+    with config_path.open("rb") as config_file:
+        configurations = tomllib.load(config_file)["configurations"]
+    maze_config_name = args.maze_config or ("Testrun" if args.test_run else "Ran_maze_size_prop_to_droplet")
+    maze_config = configurations[maze_config_name]
+    maze_file = Path(maze_config["maze_file"])
+    if not maze_file.is_absolute():
+        maze_file = Path(__file__).resolve().parent / maze_file
+    emitter_position = np.asarray(maze_config["emitter_position"], dtype=np.float32)
+    emitter_jitter = np.asarray(maze_config.get("emitter_jitter", [0.0, 0.0]), dtype=np.float32)
+    static_source_position = tuple(map(float, maze_config["static_source_position"]))
+    if emitter_position.shape != (2,) or emitter_jitter.shape != (2,):
+        raise ValueError("emitter_position and emitter_jitter must each contain [x, y].")
+except (KeyError, OSError, tomllib.TOMLDecodeError, TypeError, ValueError) as error:
+    parser.error(f"Invalid maze/startpoint configuration in {config_path}: {error}")
 
 # This script is used to run the chemical solver on a maze with one particle.
 # It initializes the parameters, generates a maze, and runs the simulation.
@@ -63,7 +90,6 @@ M = 1.0 * 10 ** (-1)  # mass of the particle (0.001, 0.2)
 J = 4.0 * 10 ** (-2)  # moment of inertia of the particle (0.001, 0.06)
 
 epsilon_LJ = 0.10  # Lennard-Jones potential parameter for interaction between particles
-static_source_position = (90.2, 10.5)  # Position of the static source
 static_source_production_strength = 0.0  # Strength of the static source
 static_source_decay_rate = 0.0  # characteristic decay rate of the source
 
@@ -94,7 +120,6 @@ num_particles = args.num_particles  # Number of particles
 emission_rate = args.emission_rate  # droplets per second
 if desired_time:
     num_particles = int(np.ceil(emission_rate * desired_time))
-emitter_position = np.array([2.1, 82.1], dtype=np.float32)
 drops_added_incremental = True
 
 test_run = args.test_run
@@ -118,10 +143,7 @@ file_prefix_part = os.path.join(data, "part")
 # maze = box_maze(n_xbins, n_ybins)
 
 # maze = maze_from_file('different_mazes/empty_box.tsv')
-maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet.tsv")
-if test_run:
-    maze = maze_from_file("different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv")
-# maze = maze_from_file('different_mazes/Maass_maze_1x.tsv')
+maze = maze_from_file(str(maze_file))
 wall = np.transpose(np.where(maze == 0))
 
 exit_radius = 20.0  # radius of the exit around the target (static source)
@@ -134,8 +156,6 @@ if test_run:
     n_steps = int(n_steps * 0.1 // 1)  # preferably 600
     # time_loop = int(time_loop * 0.1 // 1)  # preferably 10
     write_every = 100
-    static_source_position = (42.5, 10.5)  # Position of the static source
-    emitter_position = np.array([2.1, 14.8], dtype=np.float32)
 
 # death zone and reaper timer
 death_zone_map = np.zeros_like(maze, dtype=bool)
@@ -172,7 +192,7 @@ exit_trigger_time = np.full(num_particles, np.inf)
 
 
 # Default: All particles start at the same emitter location and activate at delayed birth times.
-p[:, 0, :] = emitter_position
+p[:, 0, :] = emitter_position + np.random.uniform(-emitter_jitter, emitter_jitter, size=(num_particles, 2))
 v[:, 0, :] = 0.0
 theta[:, 0] = np.random.uniform(0, 2.0 * np.pi, size=num_particles)
 omega[:, 0] = 0.0
@@ -285,6 +305,9 @@ parameter_dict = {
     "J": J,
     "epsilon_LJ": epsilon_LJ,
     "static_source_position": static_source_position,
+    "maze_file": str(maze_file),
+    "maze_config": maze_config_name,
+    "emitter_jitter": tuple(emitter_jitter),
     "static_source_production_strength": static_source_production_strength,
     "advection": advection,
     "massive_particle": massive_particle,
