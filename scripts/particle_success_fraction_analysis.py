@@ -15,8 +15,10 @@ import json
 import logging
 import math
 import re
+import shlex
 from concurrent.futures import ProcessPoolExecutor
 from heapq import heappop, heappush
+from itertools import product
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -52,24 +54,88 @@ def _resolve_path(path: str | Path) -> Path:
     return Path(path).expanduser().resolve() if str(path) else Path()
 
 
+def _resolve_maze_file(metadata_path: Path, maze_file: str | Path) -> Path:
+    path = Path(maze_file).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    candidates = (Path.cwd() / path, metadata_path.resolve().parent / path, Path(__file__).resolve().parents[1] / path)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError(f"Maze file {maze_file!s} from {metadata_path} was not found.")
+
+
+def _maze_coordinate_to_sim(coordinate: Iterable[int], raw_shape: tuple[int, int]) -> tuple[int, int]:
+    row, column = (int(value) for value in coordinate)
+    return column, raw_shape[0] - 1 - row
+
+
+def _read_jobs(path: Path | None) -> dict[str, dict[str, str]]:
+    if path is None or not path.is_file():
+        return {}
+    jobs: dict[str, dict[str, str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        tokens = shlex.split(line)
+        parameters: dict[str, str] = {}
+        for index, token in enumerate(tokens[:-1]):
+            if token.startswith("--"):
+                parameters[token[2:].replace("-", "_")] = tokens[index + 1]
+        if "run_id" in parameters:
+            jobs[parameters["run_id"]] = parameters
+    return jobs
+
+
+def _parameters_from_grid(config: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    if config is None:
+        return {}
+    defaults = config.get("defaults", {})
+    run_parameters: dict[str, dict[str, str]] = {}
+    for regime in config.get("regimes", []):
+        grid = regime.get("grid", {})
+        keys = list(grid)
+        combinations = product(*(grid[key] for key in keys)) if keys else [()]
+        for config_index, values in enumerate(combinations):
+            parameters = defaults | dict(zip(keys, values))
+            run_id = f"{regime['name']}_c{config_index:04d}"
+            run_parameters[run_id] = {key: str(value) for key, value in parameters.items()}
+    return run_parameters
+
+
+def _configuration_plot_name(run_id: str, parameters: dict[str, str], maze_path: Path) -> str:
+    required = {"grim_reaper_delay", "emission_rate", "desired_time"}
+    if required.issubset(parameters):
+        dash = lambda value: str(float(value)).replace(".", "-")
+        return (
+            f"rt{dash(parameters['grim_reaper_delay'])}_"
+            f"er{dash(parameters['emission_rate'])}_"
+            f"{float(parameters['desired_time']):g}s_{maze_path.stem}.png"
+        )
+    return f"{run_id}_{maze_path.stem}.png"
+
+
 def _ensure_logger(logger_obj: logging.Logger | None) -> logging.Logger:
     if logger_obj is not None:
         return logger_obj
     return logger
 
 
-def load_maze_oriented(file_path: str | Path, start: tuple[int, int] = START_DEFAULT, end: tuple[int, int] = END_DEFAULT) -> np.ndarray:
+def load_maze_oriented(
+    file_path: str | Path,
+    start: tuple[int, int] = START_DEFAULT,
+    end: tuple[int, int] = END_DEFAULT,
+    wall_value: int = 1,
+) -> np.ndarray:
     """Load a maze TSV and apply the single, authoritative orientation fix.
 
-    The maze file stores a walkable/free-cell mask as 1 and walls as 0. The raw
-    file is rotated and inverted to match the simulation coordinate convention used
+    The maze file stores walls as wall_value. The raw file is rotated and inverted
+    to match the simulation coordinate convention used
     elsewhere in the project: maze indices are treated as (i, j), path plotting
     uses maze.T with origin='lower', and particle coordinates are compared directly
     against path vertices in index space.
     """
     maze_path = Path(file_path)
     raw = np.loadtxt(maze_path, delimiter="\t", dtype=int)
-    maze = (1 - np.rot90(raw, k=-1)).astype(np.int8)
+    maze = np.rot90(raw != wall_value, k=-1).astype(np.int8)
 
     start_i, start_j = start
     end_i, end_j = end
@@ -547,6 +613,7 @@ def aggregate(series_root: str | Path, output_root: str | Path) -> tuple[list[di
     """Aggregate shot-level outputs into a long-form table and per-configuration summary."""
     series_root = Path(series_root)
     output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
     long_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
     birth_time_rows: list[dict[str, Any]] = []
@@ -676,8 +743,11 @@ def main() -> int:
     parser.add_argument("--config", type=Path, help="TOML configuration file with series.data_root and series.output_root.")
     parser.add_argument("--series-dir", type=Path, help="Direct path to a series directory: <data_root>/<series>.")
     parser.add_argument("--maze-file", type=Path, help="Path to the maze TSV file.")
-    parser.add_argument("--start", type=int, nargs=2, default=list(START_DEFAULT), metavar=("I", "J"), help="Maze start coordinate (i, j).")
-    parser.add_argument("--end", type=int, nargs=2, default=list(END_DEFAULT), metavar=("I", "J"), help="Maze end coordinate (i, j).")
+    parser.add_argument("--maze-meta", type=Path, help="Maze metadata TOML with maze_file, wall_value, emitter_grid, and goal_grid.")
+    parser.add_argument("--jobs", type=Path, help="Generated jobs.txt used to label plots with simulation parameters.")
+    parser.add_argument("--out-dir", type=Path, help="Single directory for all PNG plots; defaults to output_root/<series>.")
+    parser.add_argument("--start", type=int, nargs=2, default=None, metavar=("I", "J"), help="Override maze start coordinate in simulation frame.")
+    parser.add_argument("--end", type=int, nargs=2, default=None, metavar=("I", "J"), help="Override maze end coordinate in simulation frame.")
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE)
     parser.add_argument("--wall-weight", type=float, default=DEFAULT_WALL_WEIGHT)
     parser.add_argument("--wall-power", type=float, default=DEFAULT_WALL_POWER)
@@ -713,30 +783,47 @@ def main() -> int:
     else:
         raise ValueError("Provide either --config or --series-dir.")
 
+    maze_metadata: dict[str, Any] = {}
+    metadata_path = args.maze_meta.resolve() if args.maze_meta is not None else None
+    if metadata_path is not None:
+        with metadata_path.open("rb") as file:
+            maze_metadata = tomllib.load(file)
     if args.maze_file is not None:
-        maze_path = Path(args.maze_file).resolve()
+        maze_path = args.maze_file.resolve()
+    elif "maze_file" in maze_metadata:
+        maze_path = _resolve_maze_file(metadata_path, maze_metadata["maze_file"])
     elif config_dict is not None and "maze_file" in config_dict:
         maze_path = Path(config_dict["maze_file"]).resolve()
     else:
-        raise ValueError("A maze file must be provided via --maze-file or config['maze_file'].")
+        raise ValueError("Provide --maze-file or --maze-meta with a maze_file entry.")
 
     series_root = data_root / series_name
     if not series_root.exists():
         raise FileNotFoundError(f"Series directory does not exist: {series_root}")
 
-    if args.start is not None and len(args.start) == 2:
-        start = tuple(args.start)
-    else:
-        start = START_DEFAULT
-    if args.end is not None and len(args.end) == 2:
-        end = tuple(args.end)
-    else:
-        end = END_DEFAULT
+    raw_shape = np.loadtxt(maze_path, delimiter="\t", dtype=int).shape
+    metadata_start = _maze_coordinate_to_sim(maze_metadata["emitter_grid"], raw_shape) if "emitter_grid" in maze_metadata else START_DEFAULT
+    metadata_end = _maze_coordinate_to_sim(maze_metadata["goal_grid"], raw_shape) if "goal_grid" in maze_metadata else END_DEFAULT
+    start = tuple(args.start) if args.start is not None else metadata_start
+    end = tuple(args.end) if args.end is not None else metadata_end
 
-    maze = load_maze_oriented(maze_path, start=start, end=end)
+    maze = load_maze_oriented(maze_path, start=start, end=end, wall_value=int(maze_metadata.get("wall_value", 1)))
     path = centerline_path(maze, start, end, wall_weight=args.wall_weight, wall_power=args.wall_power)
+    plot_output_dir = args.out_dir.resolve() if args.out_dir is not None else output_root / series_name
+    jobs_candidates = (
+        output_root / series_name / "jobs.txt",
+        data_root.parent / "output" / series_name / "jobs.txt",
+        Path(__file__).resolve().parents[1] / "output" / series_name / "jobs.txt",
+    )
+    jobs_path = args.jobs.resolve() if args.jobs is not None else next(
+        (candidate for candidate in jobs_candidates if candidate.is_file()), jobs_candidates[0]
+    )
+    run_parameters = _parameters_from_grid(config_dict)
+    run_parameters.update(_read_jobs(jobs_path))
+    if not run_parameters:
+        logger.warning("No parameter grid or jobs file found; plot filenames will use run IDs.")
     if not args.no_plots:
-        path_plot_path = output_root / series_name / "path_tolerance.png"
+        path_plot_path = plot_output_dir / f"maze_{maze_path.stem}_path_tolerance.png"
         plot_path_tolerance(maze, path, tolerance=args.tolerance, start=start, end=end, output_path=path_plot_path, show=args.show_path)
         if args.path_only:
             return 0
@@ -814,7 +901,8 @@ def main() -> int:
                 if records:
                     shot_rows[shot_key] = records
             if shot_rows:
-                plot_configuration(run_id, shot_rows, output_root / series_name / run_id / "success_fraction.png", logger_obj=logger)
+                plot_path = plot_output_dir / _configuration_plot_name(run_id, run_parameters.get(run_id, {}), maze_path)
+                plot_configuration(run_id, shot_rows, plot_path, logger_obj=logger)
 
     aggregate_root = output_root / series_name
     aggregate(series_root, aggregate_root)
