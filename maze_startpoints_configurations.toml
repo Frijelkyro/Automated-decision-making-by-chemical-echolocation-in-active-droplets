@@ -1,0 +1,26 @@
+# Positions are [x, y] in simulation coordinates. Keys are maze filename stems.
+
+[mazes.QJ01]
+maze_file = "different_mazes/QJ01.tsv"
+emitter_position = [14.5, 2.5]
+static_source_position = [117.5, 42.5]
+
+[mazes.Ran_maze_size_prop_to_droplet]
+maze_file = "different_mazes/Ran_maze_size_prop_to_droplet.tsv"
+emitter_position = [2.1, 82.1]
+static_source_position = [90.2, 10.5]
+
+[mazes.Ran_maze_size_prop_to_droplet_testrun]
+maze_file = "different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv"
+emitter_position = [2.1, 14.8]
+static_source_position = [42.5, 10.5]
+
+[mazes.empty_box]
+maze_file = "different_mazes/empty_box.tsv"
+emitter_position = [2.1, 82.1]
+static_source_position = [90.2, 10.5]
+
+[mazes.my_maze]
+maze_file = "different_mazes/my_maze.tsv"
+emitter_position = [2.1, 32.1]
+static_source_position = [35.2, 5.5]

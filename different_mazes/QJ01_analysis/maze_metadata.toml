@@ -1,0 +1,37 @@
+maze_file = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/QJ01.tsv"
+wall_value = 1
+dx = 1.0
+goal_tolerance = 2.0
+emitter_position = [14.5, 2.5]
+static_source_position = [117.5, 42.5]
+grid_shape = [46, 121]
+path_length = 127
+emitter_grid = [40, 17]
+goal_grid = [6, 114]
+plot_path = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/QJ01_analysis/maze_decision_zones.png"
+zone_extent = "compact"
+
+
+[[junctions]]
+id = "J01"
+center = [33, 16]
+path_index = 7
+branch_count = 3
+kind = "Y"
+neighbors = [[31, 16], [33, 14], [35, 16]]
+
+[[junctions]]
+id = "J02"
+center = [26, 40]
+path_index = 36
+branch_count = 3
+kind = "Y"
+neighbors = [[24, 40], [26, 38], [28, 40]]
+
+[[junctions]]
+id = "J03"
+center = [19, 64]
+path_index = 65
+branch_count = 3
+kind = "Y"
+neighbors = [[17, 64], [19, 62], [21, 64]]

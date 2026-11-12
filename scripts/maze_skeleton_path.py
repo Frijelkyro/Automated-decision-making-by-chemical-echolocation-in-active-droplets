@@ -8,8 +8,10 @@ identifies local Y-junction decision zones.
 
 from __future__ import annotations
 
+import argparse
 import heapq
 from pathlib import Path
+import tomllib
 
 import matplotlib
 
@@ -24,10 +26,9 @@ from skimage.morphology import skeletonize
 # Configuration
 # ---------------------------------------------------------------------------
 MAZE_FILE = Path("different_mazes/Ran_maze_size_prop_to_droplet.tsv")
-EMITTER_POSITION = (2.1, 84.1)
-STATIC_SOURCE_POSITION = (90.2, 10.5)  # project convention from maze_cluster_script.py
 GOAL_TOLERANCE = 2.0
 DX = 1.0
+COMPACT_ZONE_SIZE = 5
 
 # Preferred wall convention for TSVs. The project traditionally inverts raw TSVs,
 # but the actual file convention is 1 = wall and 0 = free space.
@@ -36,8 +37,6 @@ WALL_VALUE = 1
 COST_LAMBDA = 60.0
 COST_EPS = 0.5
 COST_P = 2.5
-SNAP_RADIUS = 12.0
-
 def analysis_dir_for_maze(maze_path: str | Path) -> Path:
     """Return a per-maze directory for persisted analysis artifacts."""
     base_path = Path(maze_path)
@@ -61,7 +60,10 @@ def save_zone_masks(mask_path: Path, zones: dict[str, dict[str, set[tuple[int, i
 
 def save_metadata(metadata_path: Path, maze_path: Path, maze_data: dict, path_cells: list[tuple[int, int]],
                  junctions: list[dict], zones: dict[str, dict[str, set[tuple[int, int]]]],
-                 emitter_grid: tuple[int, int], goal_grid: tuple[int, int], output_plot: Path) -> None:
+                 emitter_grid: tuple[int, int], goal_grid: tuple[int, int], output_plot: Path,
+                 emitter_position: tuple[float, float] | None = None,
+                 goal_position: tuple[float, float] | None = None,
+                 zone_extent: str = "maximal") -> None:
     """Save maze metadata and junction summaries for future reuse."""
     lines = [
         f'maze_file = "{str(maze_path)}"',
@@ -73,8 +75,13 @@ def save_metadata(metadata_path: Path, maze_path: Path, maze_data: dict, path_ce
         f'emitter_grid = [{emitter_grid[0]}, {emitter_grid[1]}]',
         f'goal_grid = [{goal_grid[0]}, {goal_grid[1]}]',
         f'plot_path = "{str(output_plot)}"',
+        f'zone_extent = "{zone_extent}"',
         "",
     ]
+    if emitter_position is not None:
+        lines.insert(4, f'emitter_position = [{emitter_position[0]}, {emitter_position[1]}]')
+    if goal_position is not None:
+        lines.insert(5, f'static_source_position = [{goal_position[0]}, {goal_position[1]}]')
 
     for junction in junctions:
         center = junction["center"]
@@ -94,10 +101,6 @@ def save_metadata(metadata_path: Path, maze_path: Path, maze_data: dict, path_ce
         ])
 
     metadata_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-OUTPUT_PLOT = Path("output/maze_decision_zones.png")
-OUTPUT_PLOT.parent.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -319,8 +322,11 @@ def build_zones(
     skeleton: np.ndarray,
     free_mask: np.ndarray,
     path: list[tuple[int, int]],
+    zone_extent: str = "maximal",
 ) -> dict:
-    """Expand skeleton segments to full corridor width for each junction."""
+    """Expand skeleton segments to corridor width, optionally clipping to 5x5."""
+    if zone_extent not in {"maximal", "compact"}:
+        raise ValueError("zone_extent must be 'maximal' or 'compact'.")
     if not path:
         return {}
 
@@ -402,6 +408,16 @@ def build_zones(
             "correct": expand_to_walls(correct_segment),
             "wrong": expand_to_walls(wrong_segment),
         }
+        if zone_extent == "compact":
+            center_row, center_col = junction["center"]
+            radius = COMPACT_ZONE_SIZE // 2
+            for label, cells in zones_for_junction.items():
+                zones_for_junction[label] = {
+                    cell
+                    for cell in cells
+                    if abs(cell[0] - center_row) <= radius
+                    and abs(cell[1] - center_col) <= radius
+                }
 
         result[jid] = zones_for_junction
 
@@ -549,8 +565,82 @@ def plot_maze(grid: np.ndarray, free_mask: np.ndarray, skeleton: np.ndarray, pat
     print(f"Saved plot to {output_path}")
 
 
-def main():
-    path = Path(MAZE_FILE)
+def build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--maze", type=Path, default=MAZE_FILE, help="Maze TSV file to analyze.")
+    parser.add_argument(
+        "--startpoints-config",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "maze_startpoints_configurations.toml",
+        help="TOML file mapping maze names to emitter and static-source positions.",
+    )
+    parser.add_argument("--emitter-position", "--emitter", nargs=2, type=float, metavar=("X", "Y"))
+    parser.add_argument(
+        "--static-source-position", "--goal", nargs=2, type=float, metavar=("X", "Y"),
+        help="Goal/static-source position in simulation coordinates.",
+    )
+    parser.add_argument("--zone-extent", choices=("maximal", "compact"), default="maximal")
+    return parser
+
+
+def resolve_maze_path(maze_path: Path) -> Path:
+    """Resolve relative maze paths from the current directory or repository root."""
+    maze_path = maze_path.expanduser()
+    if maze_path.is_absolute() or maze_path.exists():
+        return maze_path.resolve()
+    return (Path(__file__).resolve().parents[1] / maze_path).resolve()
+
+
+def load_start_positions(
+    config_path: Path,
+    maze_path: Path,
+    emitter_override: list[float] | tuple[float, float] | None = None,
+    goal_override: list[float] | tuple[float, float] | None = None,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Load configured positions for a maze, applying any CLI overrides."""
+    maze_config = {}
+    if emitter_override is None or goal_override is None:
+        with config_path.expanduser().open("rb") as config_file:
+            configuration = tomllib.load(config_file)
+        maze_config = configuration.get("mazes", {}).get(maze_path.stem, {})
+
+    emitter = emitter_override or maze_config.get("emitter_position")
+    goal = goal_override or maze_config.get("static_source_position")
+    if emitter is None or goal is None:
+        missing = []
+        if emitter is None:
+            missing.append("emitter_position")
+        if goal is None:
+            missing.append("static_source_position")
+        raise ValueError(
+            f"No {', '.join(missing)} configured for {maze_path.name}; "
+            "add them to the startpoints TOML or provide CLI overrides."
+        )
+
+    def as_position(values, name: str) -> tuple[float, float]:
+        if not isinstance(values, (list, tuple)) or len(values) != 2:
+            raise ValueError(f"{name} for {maze_path.name} must contain exactly two coordinates.")
+        return float(values[0]), float(values[1])
+
+    return as_position(emitter, "emitter_position"), as_position(goal, "static_source_position")
+
+
+def main(argv: list[str] | None = None):
+    parser = build_argument_parser()
+    args = parser.parse_args(argv)
+    path = resolve_maze_path(args.maze)
+    if not path.is_file():
+        parser.error(f"Maze file does not exist: {path}")
+    config_path = args.startpoints_config.expanduser()
+    if not config_path.is_absolute() and not config_path.is_file():
+        config_path = Path(__file__).resolve().parents[1] / config_path
+    try:
+        emitter_position, goal_position = load_start_positions(
+            config_path, path, args.emitter_position, args.static_source_position
+        )
+    except (OSError, tomllib.TOMLDecodeError, ValueError) as error:
+        parser.error(str(error))
+
     analysis_dir = analysis_dir_for_maze(path)
     analysis_dir.mkdir(parents=True, exist_ok=True)
 
@@ -559,14 +649,14 @@ def main():
     skeleton = maze_data["skeleton"]
     dist = maze_data["distance"]
 
-    path_cells, start_cell, goal_cell = build_path(free_mask, skeleton, EMITTER_POSITION, STATIC_SOURCE_POSITION, dx=DX)
+    path_cells, start_cell, goal_cell = build_path(free_mask, skeleton, emitter_position, goal_position, dx=DX)
     emitter_grid = start_cell
     goal_grid = goal_cell
 
     graph = build_graph(skeleton)
     # drop the last junction, as this is most likely already at the goal
     junctions = order_junctions_by_path(find_junctions(skeleton, graph), path_cells)[:-1]
-    zones = build_zones(junctions, graph, skeleton, free_mask, path_cells)
+    zones = build_zones(junctions, graph, skeleton, free_mask, path_cells, zone_extent=args.zone_extent)
 
     for jid, masks in zones.items():
         print(
@@ -578,7 +668,10 @@ def main():
 
     output_plot = analysis_dir / "maze_decision_zones.png"
     save_zone_masks(analysis_dir / "zone_masks.npz", zones, free_mask.shape)
-    save_metadata(analysis_dir / "maze_metadata.toml", path, maze_data, path_cells, junctions, zones, emitter_grid, goal_grid, output_plot)
+    save_metadata(
+        analysis_dir / "maze_metadata.toml", path, maze_data, path_cells, junctions, zones,
+        emitter_grid, goal_grid, output_plot, emitter_position, goal_position, args.zone_extent,
+    )
 
     print(f"Maze file: {path}")
     print(f"Encoded wall value: {maze_data['wall_value']}")

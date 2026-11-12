@@ -77,6 +77,67 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
         self.assertIn((0, 7), zones["J01"]["wrong"])
         self.assertIn((1, 6), zones["J01"]["wrong"])
 
+    def test_compact_zone_masks_fill_local_corridor_within_five_by_five(self):
+        shape = (7, 15)
+        free = np.zeros(shape, dtype=bool)
+        free[2:5, 1:14] = True
+        free[0:7, 6:9] = True
+        path = [(3, col) for col in range(1, 14)]
+        skeleton = np.zeros(shape, dtype=bool)
+        branch = [(row, 7) for row in range(2, -1, -1)]
+        for cell in path + branch:
+            skeleton[cell] = True
+        graph = {cell: [] for cell in path + branch}
+        for first, second in zip(path, path[1:]):
+            graph[first].append(second)
+            graph[second].append(first)
+        branch_chain = [(3, 7)] + branch
+        for first, second in zip(branch_chain, branch_chain[1:]):
+            graph[first].append(second)
+            graph[second].append(first)
+        junctions = [
+            {"id": "J01", "center": (3, 7), "cluster": {(3, 7)}},
+            {"id": "J02", "center": (3, 11), "cluster": {(3, 11)}},
+        ]
+
+        zones = maze_analysis.build_zones(junctions, graph, skeleton, free, path, zone_extent="compact")
+
+        for cells in zones["J01"].values():
+            self.assertTrue(all(1 <= row <= 5 and 5 <= col <= 9 for row, col in cells))
+        self.assertIn((2, 5), zones["J01"]["before"])
+        self.assertIn((2, 9), zones["J01"]["correct"])
+        self.assertIn((1, 7), zones["J01"]["wrong"])
+
+    def test_start_positions_load_from_maze_config_and_allow_overrides(self):
+        config_path = self.root / "startpoints.toml"
+        config_path.write_text(
+            '[mazes.QJ01]\nemitter_position = [14.5, 2.5]\nstatic_source_position = [117.5, 42.5]\n',
+            encoding="utf-8",
+        )
+
+        configured = maze_analysis.load_start_positions(config_path, Path("QJ01.tsv"))
+        overridden = maze_analysis.load_start_positions(
+            config_path, Path("QJ01.tsv"), emitter_override=[10, 4], goal_override=[110, 40]
+        )
+
+        self.assertEqual(configured, ((14.5, 2.5), (117.5, 42.5)))
+        self.assertEqual(overridden, ((10.0, 4.0), (110.0, 40.0)))
+
+    def test_maze_cli_accepts_positions_and_zone_extent(self):
+        args = maze_analysis.build_argument_parser().parse_args(
+            [
+                "--maze", "different_mazes/QJ01.tsv",
+                "--emitter-position", "14.5", "2.5",
+                "--static-source-position", "117.5", "42.5",
+                "--zone-extent", "compact",
+            ]
+        )
+
+        self.assertEqual(args.maze, Path("different_mazes/QJ01.tsv"))
+        self.assertEqual(args.emitter_position, [14.5, 2.5])
+        self.assertEqual(args.static_source_position, [117.5, 42.5])
+        self.assertEqual(args.zone_extent, "compact")
+
     def test_metadata_neighbors_are_valid_toml_integer_pairs(self):
         path = [(1, 1), (1, 2)]
         junctions = [
