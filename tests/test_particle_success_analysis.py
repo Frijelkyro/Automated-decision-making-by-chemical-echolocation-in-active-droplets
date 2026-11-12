@@ -4,9 +4,14 @@ import numpy as np
 import pytest
 
 from scripts.particle_success_fraction_analysis import (
+    _configuration_plot_name,
+    _maze_coordinate_to_sim,
+    _parameters_from_grid,
+    _read_jobs,
     load_maze_oriented,
     centerline_path,
     index_shot,
+    main,
     aggregate,
     plot_configuration,
     score_shot,
@@ -172,3 +177,74 @@ def test_aggregate_and_plot_average_success_by_birth_time(tmp_path):
     plot_path = output / "success_fraction.png"
     plot_configuration("run_c0000", shot_rows, plot_path)
     assert plot_path.is_file()
+
+
+def test_parameter_metadata_controls_plot_name_and_maze_coordinate(tmp_path):
+    jobs = tmp_path / "jobs.txt"
+    jobs.write_text(
+        "python run.py --grim-reaper-delay 6.0 --emission-rate 1.0 "
+        "--desired-time 400 --run-id emission_1_c0000 --shot 0\n",
+        encoding="utf-8",
+    )
+    parameters = _read_jobs(jobs)["emission_1_c0000"]
+    maze_path = tmp_path / "example_maze.tsv"
+
+    assert _configuration_plot_name("emission_1_c0000", parameters, maze_path) == (
+        "rt6-0_er1-0_400s_example_maze.png"
+    )
+    assert _maze_coordinate_to_sim((27, 3), (110, 99)) == (3, 82)
+
+    config = {
+        "defaults": {"grim_reaper_delay": 6.0, "desired_time": 400},
+        "regimes": [{"name": "emission_1", "grid": {"emission_rate": [1.0]}}],
+    }
+    assert _parameters_from_grid(config)["emission_1_c0000"]["emission_rate"] == "1.0"
+
+
+def test_main_selects_maze_metadata_and_saves_parameter_named_pngs(tmp_path, monkeypatch):
+    maze_dir = tmp_path / "mazes"
+    maze_dir.mkdir()
+    raw_maze = np.ones((7, 7), dtype=int)
+    raw_maze[1:6, 1:6] = 0
+    maze_file = maze_dir / "maze.tsv"
+    np.savetxt(maze_file, raw_maze, delimiter="\t", fmt="%d")
+    metadata_file = maze_dir / "maze_metadata.toml"
+    metadata_file.write_text(
+        'maze_file = "maze.tsv"\nwall_value = 1\nemitter_grid = [1, 1]\ngoal_grid = [5, 5]\n',
+        encoding="utf-8",
+    )
+
+    shot = tmp_path / "data" / "series" / "run_c0000" / "shot_000"
+    shot.mkdir(parents=True)
+    np.savez(shot / "param_state.npz", birth_times=np.array([0.0]), exit_trigger_time=np.array([1.0]))
+    for timestep, simulation_time, position in ((0, 0.0, (1.0, 5.0)), (1, 1.0, (5.0, 1.0))):
+        np.savez(
+            shot / f"part_{timestep:03d}.npz",
+            timestep=timestep,
+            simulation_time=simulation_time,
+            x=np.array([position[0]]),
+            y=np.array([position[1]]),
+        )
+
+    jobs = tmp_path / "output" / "series" / "jobs.txt"
+    jobs.parent.mkdir(parents=True)
+    jobs.write_text(
+        "python run.py --grim-reaper-delay 6.0 --emission-rate 1.0 "
+        "--desired-time 10 --run-id run_c0000 --shot 0\n",
+        encoding="utf-8",
+    )
+    png_dir = tmp_path / "all_pngs"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "particle_success_fraction_analysis.py",
+            "--series-dir", str(shot.parents[1]),
+            "--maze-meta", str(metadata_file),
+            "--out-dir", str(png_dir),
+        ],
+    )
+
+    assert main() == 0
+    assert (png_dir / "rt6-0_er1-0_10s_maze.png").is_file()
+    assert (png_dir / "maze_maze_path_tolerance.png").is_file()
+    assert (tmp_path / "data" / "output" / "series" / "particle_success_by_birth_time.csv").is_file()
