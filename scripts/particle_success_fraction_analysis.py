@@ -554,28 +554,39 @@ def _parse_particle_success_file(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _summarize_birth_times(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[float, dict[str, Any]] = {}
+def _summarize_birth_times(
+    rows: Iterable[dict[str, Any]], bin_width: float = 1.0
+) -> list[dict[str, Any]]:
+    if not math.isfinite(bin_width) or bin_width <= 0.0:
+        raise ValueError("Birth-time bin width must be positive and finite.")
+    groups: dict[int, dict[str, Any]] = {}
     for row in rows:
         birth_time = float(row["birth_time"])
         success_fraction = float(row["success_fraction"])
         if not math.isfinite(birth_time) or not math.isfinite(success_fraction):
             continue
-        group = groups.setdefault(birth_time, {"sum": 0.0, "count": 0, "shots": set()})
-        group["sum"] += success_fraction
-        group["count"] += 1
+        bin_index = math.floor(birth_time / bin_width)
+        group = groups.setdefault(bin_index, {"values": [], "shots": set()})
+        group["values"].append(success_fraction)
         if row.get("shot") is not None:
             group["shots"].add(row["shot"])
 
-    return [
-        {
-            "birth_time": birth_time,
-            "mean_success_fraction": group["sum"] / group["count"],
-            "particle_count": group["count"],
-            "shot_count": len(group["shots"]),
-        }
-        for birth_time, group in sorted(groups.items())
-    ]
+    summaries = []
+    for bin_index, group in sorted(groups.items()):
+        values = np.asarray(group["values"], dtype=float)
+        count = len(values)
+        standard_deviation = float(np.std(values, ddof=1)) if count > 1 else math.nan
+        summaries.append(
+            {
+                "birth_time_bin": bin_index,
+                "birth_time": (bin_index + 0.5) * bin_width,
+                "mean_success_fraction": float(np.mean(values)),
+                "standard_deviation_success_fraction": standard_deviation,
+                "particle_count": count,
+                "shot_count": len(group["shots"]),
+            }
+        )
+    return summaries
 
 
 def plot_configuration(
@@ -583,19 +594,39 @@ def plot_configuration(
     shot_rows: dict[int, list[dict[str, Any]]],
     output_path: str | Path,
     logger_obj: logging.Logger | None = None,
+    birth_bin_width: float = 1.0,
+    show_individual_points: bool = False,
 ) -> None:
     """Plot mean success fraction by birth time for one configuration."""
     log = _ensure_logger(logger_obj)
     fig, ax = plt.subplots(figsize=(10, 5))
     rows = [dict(row, shot=shot_index) for shot_index, shot_rows in shot_rows.items() for row in shot_rows]
-    summary = _summarize_birth_times(rows)
+    summary = _summarize_birth_times(rows, bin_width=birth_bin_width)
     if summary:
-        ax.plot(
+        if show_individual_points:
+            ax.scatter(
+                [float(row["birth_time"]) for row in rows if math.isfinite(float(row["birth_time"])) and math.isfinite(float(row["success_fraction"]))],
+                [float(row["success_fraction"]) for row in rows if math.isfinite(float(row["birth_time"])) and math.isfinite(float(row["success_fraction"]))],
+                alpha=0.16,
+                s=12,
+                color="tab:gray",
+                label="Individual particles",
+                zorder=1,
+            )
+        means = [row["mean_success_fraction"] for row in summary]
+        errors = [row["standard_deviation_success_fraction"] for row in summary]
+        ax.errorbar(
             [row["birth_time"] for row in summary],
-            [row["mean_success_fraction"] for row in summary],
-            "o-",
+            means,
+            yerr=[error if math.isfinite(error) else 0.0 for error in errors],
+            fmt="o-",
             markersize=3,
+            capsize=3,
+            linewidth=1.2,
+            label=f"Binned mean ± 1σ (SD), width {birth_bin_width:g}",
+            zorder=2,
         )
+        ax.legend()
 
     ax.set_title(f"{run_id} ({len(shot_rows)} shots)")
     ax.set_xlabel("Particle birth time")
@@ -609,7 +640,9 @@ def plot_configuration(
     log.info("Saved configuration plot to %s", path)
 
 
-def aggregate(series_root: str | Path, output_root: str | Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def aggregate(
+    series_root: str | Path, output_root: str | Path, birth_bin_width: float = 1.0
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Aggregate shot-level outputs into a long-form table and per-configuration summary."""
     series_root = Path(series_root)
     output_root = Path(output_root)
@@ -663,7 +696,7 @@ def aggregate(series_root: str | Path, output_root: str | Path) -> tuple[list[di
 
         birth_time_rows.extend(
             {"series": series_root.name, "run_id": run_id, **row}
-            for row in _summarize_birth_times(config_particles)
+            for row in _summarize_birth_times(config_particles, bin_width=birth_bin_width)
         )
         valid = np.asarray([float(item["success_fraction"]) for item in config_particles if np.isfinite(item["success_fraction"]) and float(item["traversal_time"]) > 0.0], dtype=float)
         mean_success = float(np.mean(valid)) if valid.size else math.nan
@@ -702,7 +735,7 @@ def aggregate(series_root: str | Path, output_root: str | Path) -> tuple[list[di
     with birth_time_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
-            fieldnames=["series", "run_id", "birth_time", "mean_success_fraction", "particle_count", "shot_count"],
+            fieldnames=["series", "run_id", "birth_time_bin", "birth_time", "mean_success_fraction", "standard_deviation_success_fraction", "particle_count", "shot_count"],
         )
         writer.writeheader()
         writer.writerows(birth_time_rows)
@@ -746,6 +779,8 @@ def main() -> int:
     parser.add_argument("--maze-meta", type=Path, help="Maze metadata TOML with maze_file, wall_value, emitter_grid, and goal_grid.")
     parser.add_argument("--jobs", type=Path, help="Generated jobs.txt used to label plots with simulation parameters.")
     parser.add_argument("--out-dir", type=Path, help="Single directory for all PNG plots; defaults to output_root/<series>.")
+    parser.add_argument("--birth-bin-width", type=float, default=1.0, help="Birth-time bin width in simulation-time units.")
+    parser.add_argument("--show-individual-points", action="store_true", help="Overlay transparent per-particle points on binned means.")
     parser.add_argument("--start", type=int, nargs=2, default=None, metavar=("I", "J"), help="Override maze start coordinate in simulation frame.")
     parser.add_argument("--end", type=int, nargs=2, default=None, metavar=("I", "J"), help="Override maze end coordinate in simulation frame.")
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE)
@@ -758,6 +793,9 @@ def main() -> int:
     parser.add_argument("--show-path", action="store_true", help="Display the path-tolerance plot interactively (allowed only for path display).")
     parser.add_argument("--no-plots", action="store_true", help="Disable all figure generation.")
     args = parser.parse_args()
+
+    if not math.isfinite(args.birth_bin_width) or args.birth_bin_width <= 0.0:
+        parser.error("--birth-bin-width must be positive and finite")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(message)s")
 
@@ -902,10 +940,17 @@ def main() -> int:
                     shot_rows[shot_key] = records
             if shot_rows:
                 plot_path = plot_output_dir / _configuration_plot_name(run_id, run_parameters.get(run_id, {}), maze_path)
-                plot_configuration(run_id, shot_rows, plot_path, logger_obj=logger)
+                plot_configuration(
+                    run_id,
+                    shot_rows,
+                    plot_path,
+                    logger_obj=logger,
+                    birth_bin_width=args.birth_bin_width,
+                    show_individual_points=args.show_individual_points,
+                )
 
     aggregate_root = output_root / series_name
-    aggregate(series_root, aggregate_root)
+    aggregate(series_root, aggregate_root, birth_bin_width=args.birth_bin_width)
 
     skipped_path = output_root / series_name / "skipped_shots.tsv"
     skipped_path.parent.mkdir(parents=True, exist_ok=True)

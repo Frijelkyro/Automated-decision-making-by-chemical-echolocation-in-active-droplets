@@ -8,6 +8,7 @@ from scripts.particle_success_fraction_analysis import (
     _maze_coordinate_to_sim,
     _parameters_from_grid,
     _read_jobs,
+    _summarize_birth_times,
     load_maze_oriented,
     centerline_path,
     index_shot,
@@ -170,13 +171,33 @@ def test_aggregate_and_plot_average_success_by_birth_time(tmp_path):
     with (output / "particle_success_by_birth_time.csv").open(encoding="utf-8") as file:
         summary = list(csv.DictReader(file))
 
-    assert [float(row["birth_time"]) for row in summary] == [0.0, 200.0]
+    assert [float(row["birth_time"]) for row in summary] == [0.5, 200.5]
     assert [float(row["mean_success_fraction"]) for row in summary] == pytest.approx([0.7, 0.85])
+    assert [float(row["standard_deviation_success_fraction"]) for row in summary] == pytest.approx([np.std([0.6, 0.8], ddof=1), np.std([0.8, 0.9], ddof=1)])
     assert [int(row["shot_count"]) for row in summary] == [2, 2]
 
     plot_path = output / "success_fraction.png"
-    plot_configuration("run_c0000", shot_rows, plot_path)
+    plot_configuration("run_c0000", shot_rows, plot_path, show_individual_points=True)
     assert plot_path.is_file()
+
+
+def test_birth_time_bins_use_width_and_report_standard_deviation():
+    summary = _summarize_birth_times(
+        [
+            {"birth_time": 0.1, "success_fraction": 0.4, "shot": "shot_0"},
+            {"birth_time": 0.8, "success_fraction": 0.6, "shot": "shot_1"},
+            {"birth_time": 1.2, "success_fraction": 0.9, "shot": "shot_1"},
+        ],
+        bin_width=1.0,
+    )
+
+    assert [row["birth_time_bin"] for row in summary] == [0, 1]
+    assert [row["birth_time"] for row in summary] == [0.5, 1.5]
+    assert summary[0]["mean_success_fraction"] == pytest.approx(0.5)
+    assert summary[0]["standard_deviation_success_fraction"] == pytest.approx(np.std([0.4, 0.6], ddof=1))
+    assert math.isnan(summary[1]["standard_deviation_success_fraction"])
+    with pytest.raises(ValueError):
+        _summarize_birth_times([], bin_width=0.0)
 
 
 def test_parameter_metadata_controls_plot_name_and_maze_coordinate(tmp_path):
@@ -241,10 +262,16 @@ def test_main_selects_maze_metadata_and_saves_parameter_named_pngs(tmp_path, mon
             "--series-dir", str(shot.parents[1]),
             "--maze-meta", str(metadata_file),
             "--out-dir", str(png_dir),
+            "--birth-bin-width", "2.0",
+            "--show-individual-points",
         ],
     )
 
     assert main() == 0
     assert (png_dir / "rt6-0_er1-0_10s_maze.png").is_file()
     assert (png_dir / "maze_maze_path_tolerance.png").is_file()
-    assert (tmp_path / "data" / "output" / "series" / "particle_success_by_birth_time.csv").is_file()
+    with (tmp_path / "data" / "output" / "series" / "particle_success_by_birth_time.csv").open(encoding="utf-8") as file:
+        summary = list(csv.DictReader(file))
+    assert len(summary) == 1
+    assert float(summary[0]["birth_time"]) == 1.0
+    assert float(summary[0]["mean_success_fraction"]) == 1.0
