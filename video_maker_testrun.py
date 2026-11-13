@@ -1,4 +1,4 @@
-import os, glob, shutil, ast
+import os, glob, ast, argparse
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -12,15 +12,22 @@ from maze_functions import maze_from_file
 print("started video rendering")
 t0 = perf_counter()
 
-DATA = "./data"
-MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet.tsv"
-# MAZE = "./different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv"
+parser = argparse.ArgumentParser(description="Render a simulation shot to MP4.")
+parser.add_argument("--data", default="./data", help="Shot data directory.")
+parser.add_argument("--maze", default="./different_mazes/Ran_maze_size_prop_to_droplet.tsv")
+parser.add_argument("--frames", type=int, default=400, help="Maximum frames; 0 renders all frames.")
+parser.add_argument("--output", help="Output MP4 path; defaults to particle_trajectory.mp4 in the shot directory.")
+args = parser.parse_args()
+if args.frames < 0:
+    parser.error("--frames must be zero or a positive integer")
+
+DATA = args.data
+MAZE = args.maze
 PARAM = os.path.join(DATA, "param.txt")
 if not os.path.isfile(PARAM):
     PARAM = PARAM.removesuffix(".txt") + "_checkpoint.txt"
 GRID = os.path.join(DATA, "grid.txt")
 SHOW_TRAJECTORIES = False
-troubleshoot = True
 
 # Parameters
 params = {}
@@ -65,10 +72,9 @@ conc_files = {
     for f in glob.glob(os.path.join(DATA, "conc_*.npz"))
 }
 
-if troubleshoot: 
-    part_files = part_files[-400:]
-    timestamps = timestamps[-400:]
-    # print(conc_files)
+if args.frames:
+    part_files = part_files[-args.frames:]
+    timestamps = timestamps[-args.frames:]
 
 if not timestamps:
     raise RuntimeError("No particle NPZ files found.")
@@ -252,10 +258,8 @@ writer = animation.FFMpegWriter(
     ],
 )
 
-out = os.path.join(
-    DATA,
-    "particle_trajectory.mp4",
-)
+out = args.output or os.path.join(DATA, "particle_trajectory.mp4")
+os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
 
 # Render
 with writer.saving(
@@ -271,11 +275,6 @@ with writer.saving(
     ):
         update(i)
         writer.grab_frame()
-
-shutil.copy(
-    out,
-    "particle_trajectory.mp4",
-)
 
 elapsed = perf_counter() - t0
 
