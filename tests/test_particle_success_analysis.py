@@ -275,3 +275,40 @@ def test_main_selects_maze_metadata_and_saves_parameter_named_pngs(tmp_path, mon
     assert len(summary) == 1
     assert float(summary[0]["birth_time"]) == 1.0
     assert float(summary[0]["mean_success_fraction"]) == 1.0
+
+
+def test_main_config_selects_maze_profile_without_metadata(tmp_path, monkeypatch):
+    maze_file = tmp_path / "mazes" / "QJ01.tsv"
+    maze_file.parent.mkdir()
+    raw_maze = np.ones((7, 7), dtype=int)
+    raw_maze[1:6, 1:6] = 0
+    np.savetxt(maze_file, raw_maze, delimiter="\t", fmt="%d")
+    series_root = tmp_path / "data" / "qj01"
+    series_root.mkdir(parents=True)
+
+    config = tmp_path / "series.toml"
+    config.write_text(
+        f'[series]\nname = "qj01"\ndata_root = "{tmp_path / "data"}"\n'
+        f'output_root = "{tmp_path / "output"}"\n\n'
+        '[defaults]\nmaze_config = "QJ01_config0"\n',
+        encoding="utf-8",
+    )
+    startpoints = tmp_path / "startpoints.toml"
+    startpoints.write_text(
+        f'[configurations.QJ01_config0]\nmaze_file = "{maze_file}"\n'
+        'emitter_position = [1, 1]\nstatic_source_position = [5, 5]\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "particle_success_fraction_analysis.py",
+            "--config", str(config),
+            "--startpoints-config", str(startpoints),
+            "--path-only",
+        ],
+    )
+
+    assert main() == 0
+    assert (tmp_path / "output" / "qj01" / "maze_QJ01_path_tolerance.png").is_file()

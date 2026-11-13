@@ -37,6 +37,7 @@ END_DEFAULT = (73, 20)
 DEFAULT_TOLERANCE = 4.0
 DEFAULT_WALL_WEIGHT = 30.0
 DEFAULT_WALL_POWER = 2.0
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 logger = logging.getLogger("particle_success_analysis")
@@ -52,6 +53,13 @@ def _make_kdtree(points: np.ndarray) -> KDTree:
 
 def _resolve_path(path: str | Path) -> Path:
     return Path(path).expanduser().resolve() if str(path) else Path()
+
+
+def _sim_position_to_grid(position: Iterable[float]) -> tuple[int, int]:
+    coordinates = np.rint(np.asarray(position, dtype=float)).astype(int)
+    if coordinates.shape != (2,):
+        raise ValueError("Configured simulation positions must contain [x, y].")
+    return int(coordinates[0]), int(coordinates[1])
 
 
 def _resolve_maze_file(metadata_path: Path, maze_file: str | Path) -> Path:
@@ -777,6 +785,7 @@ def main() -> int:
     parser.add_argument("--series-dir", type=Path, help="Direct path to a series directory: <data_root>/<series>.")
     parser.add_argument("--maze-file", type=Path, help="Path to the maze TSV file.")
     parser.add_argument("--maze-meta", type=Path, help="Maze metadata TOML with maze_file, wall_value, emitter_grid, and goal_grid.")
+    parser.add_argument("--startpoints-config", type=Path, default=PROJECT_ROOT / "maze_startpoints_configuration.toml")
     parser.add_argument("--jobs", type=Path, help="Generated jobs.txt used to label plots with simulation parameters.")
     parser.add_argument("--out-dir", type=Path, help="Single directory for all PNG plots; defaults to output_root/<series>.")
     parser.add_argument("--birth-bin-width", type=float, default=1.0, help="Birth-time bin width in simulation-time units.")
@@ -800,17 +809,23 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(message)s")
 
     config_dict: dict[str, Any] | None = None
-    if args.config is not None:
-        with args.config.open("rb") as file:
+    config_path: Path | None = None
+    config_argument = args.config
+    if config_argument is not None:
+        resolved_config_path = config_argument.expanduser()
+        if not resolved_config_path.is_absolute():
+            resolved_config_path = PROJECT_ROOT / resolved_config_path
+        config_path = resolved_config_path
+        with resolved_config_path.open("rb") as file:
             config_dict = tomllib.load(file)
         series_cfg = config_dict.get("series", {})
-        series_name = str(series_cfg.get("name"))
+        series_name = str(series_cfg.get("name") or "")
         data_root = Path(series_cfg.get("data_root", "data"))
         output_root = Path(series_cfg.get("output_root", "output"))
         if not data_root.is_absolute():
-            data_root = (args.config.parent / data_root).resolve()
+            data_root = (PROJECT_ROOT / data_root).resolve()
         if not output_root.is_absolute():
-            output_root = (args.config.parent / output_root).resolve()
+            output_root = (PROJECT_ROOT / output_root).resolve()
         if not series_name:
             raise ValueError("Config file must provide series.name.")
     elif args.series_dir is not None:
@@ -821,17 +836,41 @@ def main() -> int:
     else:
         raise ValueError("Provide either --config or --series-dir.")
 
+    maze_profile: dict[str, Any] = {}
+    profile_maze_path: Path | None = None
+    profile_start: tuple[int, int] | None = None
+    profile_end: tuple[int, int] | None = None
+    profile_name = config_dict.get("defaults", {}).get("maze_config") if config_dict else None
+    if profile_name:
+        startpoints_path = args.startpoints_config.expanduser()
+        if not startpoints_path.is_absolute():
+            startpoints_path = PROJECT_ROOT / startpoints_path
+        with startpoints_path.open("rb") as file:
+            profiles = tomllib.load(file)["configurations"]
+        maze_profile = profiles[profile_name]
+        profile_maze_path = _resolve_maze_file(startpoints_path, maze_profile["maze_file"])
+        if "emitter_position" in maze_profile:
+            profile_start = _sim_position_to_grid(maze_profile["emitter_position"])
+        if "static_source_position" in maze_profile:
+            profile_end = _sim_position_to_grid(maze_profile["static_source_position"])
+
+    metadata_path = args.maze_meta.expanduser().resolve() if args.maze_meta is not None else None
+    if metadata_path is None and profile_maze_path is not None:
+        candidate = profile_maze_path.parent / f"{profile_maze_path.stem}_analysis" / "maze_metadata.toml"
+        if candidate.is_file():
+            metadata_path = candidate
     maze_metadata: dict[str, Any] = {}
-    metadata_path = args.maze_meta.resolve() if args.maze_meta is not None else None
     if metadata_path is not None:
         with metadata_path.open("rb") as file:
             maze_metadata = tomllib.load(file)
     if args.maze_file is not None:
         maze_path = args.maze_file.resolve()
-    elif "maze_file" in maze_metadata:
+    elif metadata_path is not None and "maze_file" in maze_metadata:
         maze_path = _resolve_maze_file(metadata_path, maze_metadata["maze_file"])
-    elif config_dict is not None and "maze_file" in config_dict:
-        maze_path = Path(config_dict["maze_file"]).resolve()
+    elif profile_maze_path is not None:
+        maze_path = profile_maze_path
+    elif config_dict is not None and "maze_file" in config_dict and config_path is not None:
+        maze_path = _resolve_maze_file(config_path, config_dict["maze_file"])
     else:
         raise ValueError("Provide --maze-file or --maze-meta with a maze_file entry.")
 
@@ -840,8 +879,14 @@ def main() -> int:
         raise FileNotFoundError(f"Series directory does not exist: {series_root}")
 
     raw_shape = np.loadtxt(maze_path, delimiter="\t", dtype=int).shape
-    metadata_start = _maze_coordinate_to_sim(maze_metadata["emitter_grid"], raw_shape) if "emitter_grid" in maze_metadata else START_DEFAULT
-    metadata_end = _maze_coordinate_to_sim(maze_metadata["goal_grid"], raw_shape) if "goal_grid" in maze_metadata else END_DEFAULT
+    metadata_start = (
+        _maze_coordinate_to_sim(maze_metadata["emitter_grid"], raw_shape)
+        if "emitter_grid" in maze_metadata else profile_start or START_DEFAULT
+    )
+    metadata_end = (
+        _maze_coordinate_to_sim(maze_metadata["goal_grid"], raw_shape)
+        if "goal_grid" in maze_metadata else profile_end or END_DEFAULT
+    )
     start = tuple(args.start) if args.start is not None else metadata_start
     end = tuple(args.end) if args.end is not None else metadata_end
 
