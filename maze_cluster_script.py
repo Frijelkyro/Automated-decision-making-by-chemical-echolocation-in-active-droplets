@@ -64,6 +64,7 @@ try:
     emitter_position = np.asarray(maze_config["emitter_position"], dtype=np.float32)
     emitter_jitter = np.asarray(maze_config.get("emitter_jitter", [0.0, 0.0]), dtype=np.float32)
     static_source_position = tuple(map(float, maze_config["static_source_position"]))
+    configured_exit_radius = float(maze_config["exit_radius"])
     if emitter_position.shape != (2,) or emitter_jitter.shape != (2,):
         raise ValueError("emitter_position and emitter_jitter must each contain [x, y].")
 except (KeyError, OSError, tomllib.TOMLDecodeError, TypeError, ValueError) as error:
@@ -146,7 +147,7 @@ file_prefix_part = os.path.join(data, "part")
 maze = maze_from_file(str(maze_file))
 wall = np.transpose(np.where(maze == 0))
 
-exit_radius = 20.0  # radius of the exit around the target (static source)
+exit_radius = configured_exit_radius
 grim_reaper_delay = args.grim_reaper_delay
 exit_wall_radius = 20.0  # radius for the leaky exit wall (this also removes particles when they get <2 pixels close)
 permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)

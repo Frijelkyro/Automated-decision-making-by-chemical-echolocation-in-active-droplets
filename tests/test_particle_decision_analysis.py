@@ -135,8 +135,8 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
         profiles = tomllib.loads(config_path.read_text(encoding="utf-8"))["configurations"]
 
         self.assertEqual(profiles["QJ01_config0"]["emitter_position"], [5.0, 11.05])
-        self.assertEqual(profiles["QJ01_config0"]["emitter_jitter"], [0.5, 0.0])
         self.assertEqual(profiles["QJ01_config0"]["static_source_position"], [100.2, 10.2])
+        self.assertEqual(profiles["QJ01_config0"]["exit_radius"], 20.0)
         self.assertEqual(
             profiles["Ran_maze_size_prop_to_droplet"]["emitter_position"], [2.1, 84.1]
         )
