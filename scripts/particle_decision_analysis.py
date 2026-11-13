@@ -5,6 +5,7 @@ import argparse
 import csv
 import math
 import re
+import tomllib
 import warnings
 from collections import defaultdict
 from pathlib import Path
@@ -12,10 +13,32 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def project_path(value):
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else PROJECT_ROOT / path).resolve()
+
+
+def resolve_config_paths(config_path, startpoints_path):
+    with project_path(config_path).open("rb") as config_file:
+        config = tomllib.load(config_file)
+    series = config["series"]
+    data_dir = project_path(Path(series.get("data_root", "data")) / series["name"])
+    output_dir = project_path(Path(series.get("output_root", "output")) / series["name"])
+
+    profile_name = config.get("defaults", {}).get(
+        "maze_config", "Ran_maze_size_prop_to_droplet"
+    )
+    with project_path(startpoints_path).open("rb") as startpoints_file:
+        profiles = tomllib.load(startpoints_file)["configurations"]
+    maze_path = project_path(profiles[profile_name]["maze_file"])
+    maze_analysis_dir = maze_path.parent / f"{maze_path.stem}_analysis"
+    return data_dir, maze_analysis_dir, output_dir
+
 
 def load_maze(directory):
-    import tomllib
-
     directory = Path(directory)
     meta = tomllib.loads((directory / "maze_metadata.toml").read_text())
     shape, dx = tuple(meta["grid_shape"]), float(meta["dx"])
@@ -298,31 +321,51 @@ def plot_birth_times(binned_summary, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, help="Experiment series TOML; derives data, maze metadata, and output paths.")
+    parser.add_argument(
+        "--startpoints-config",
+        type=Path,
+        default=PROJECT_ROOT / "maze_startpoints_configuration.toml",
+    )
     parser.add_argument(
         "--data-dir",
-        required=True,
-        help="One shot directory or an experiment run directory containing shot_* directories",
+        help="Override the configured series root, or analyze one run/shot directory.",
     )
-    parser.add_argument("--maze-analysis-dir", required=True, help="Directory containing maze masks")
-    parser.add_argument("--output-dir", default="decision_results")
+    parser.add_argument("--maze-analysis-dir", help="Override the directory containing maze masks.")
+    parser.add_argument("--output-dir", help="Override the analysis output directory.")
     parser.add_argument("--birth-bin-width", type=float, default=1.0)
     args = parser.parse_args()
 
     if not math.isfinite(args.birth_bin_width) or args.birth_bin_width <= 0:
         parser.error("--birth-bin-width must be positive and finite")
 
-    data_root = Path(args.data_dir)
+    if args.config:
+        try:
+            configured_data, configured_maze, configured_output = resolve_config_paths(
+                args.config, args.startpoints_config
+            )
+        except (KeyError, OSError, tomllib.TOMLDecodeError, ValueError) as error:
+            parser.error(str(error))
+        data_root = project_path(args.data_dir) if args.data_dir else configured_data
+        maze_analysis_dir = Path(args.maze_analysis_dir) if args.maze_analysis_dir else configured_maze
+        output = Path(args.output_dir) if args.output_dir else configured_output / "decision_analysis"
+    else:
+        if not args.data_dir or not args.maze_analysis_dir:
+            parser.error("--data-dir and --maze-analysis-dir are required unless --config is provided")
+        data_root = Path(args.data_dir)
+        maze_analysis_dir = Path(args.maze_analysis_dir)
+        output = Path(args.output_dir or "decision_results")
+
     if any(re.fullmatch(r"part_\d+\.npz", path.name) for path in data_root.glob("part_*.npz")):
         shot_dirs = [data_root]
     else:
         shot_dirs = sorted(
-            path for path in data_root.glob("shot_*")
+            path for path in data_root.rglob("shot_*")
             if path.is_dir() and any(re.fullmatch(r"part_\d+\.npz", item.name) for item in path.glob("part_*.npz"))
         )
     if not shot_dirs:
         parser.error(f"No shot snapshots found under {data_root}")
 
-    output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     event_fields = ["run_id", "shot", "particle_id", "birth_time", "junction_id", "decision_time", "decision"]
     summary_fields = [
@@ -341,7 +384,7 @@ def main():
         for shot_dir in shot_dirs:
             shot_id = shot_dir.name if re.fullmatch(r"shot_\d+", shot_dir.name) else "shot_000"
             try:
-                events, summary = analyze(shot_dir, args.maze_analysis_dir, shot_id=shot_id)
+                events, summary = analyze(shot_dir, maze_analysis_dir, shot_id=shot_id)
             except (OSError, ValueError, KeyError) as error:
                 warnings.warn(f"Skipping incomplete shot {shot_dir}: {error}", RuntimeWarning)
                 continue
