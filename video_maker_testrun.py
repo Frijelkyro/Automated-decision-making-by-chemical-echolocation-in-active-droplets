@@ -1,4 +1,4 @@
-import os, glob, ast, argparse
+import os, glob, ast, argparse, re
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -57,20 +57,20 @@ source = np.asarray(params["static_source_position"], float)
 radius = float(params.get("exit_radius", 20))
 
 # Output files
-part_files = sorted(
-    glob.glob(os.path.join(DATA, "part_*.npz")),
-    key=lambda f: int(os.path.basename(f).split("_")[-1][:-4]),
-)
+part_snapshots = []
+for path in glob.glob(os.path.join(DATA, "part_*.npz")):
+    match = re.fullmatch(r"part_(\d+)\.npz", os.path.basename(path))
+    if match:
+        part_snapshots.append((int(match.group(1)), path))
+part_snapshots.sort()
+timestamps = [timestep for timestep, _ in part_snapshots]
+part_files = [path for _, path in part_snapshots]
 
-timestamps = [
-    int(os.path.basename(f).split("_")[-1][:-4])
-    for f in part_files
-]
-
-conc_files = {
-    int(os.path.basename(f).split("_")[-1][:-4]): f
-    for f in glob.glob(os.path.join(DATA, "conc_*.npz"))
-}
+conc_files = {}
+for path in glob.glob(os.path.join(DATA, "conc_*.npz")):
+    match = re.fullmatch(r"conc_(\d+)\.npz", os.path.basename(path))
+    if match:
+        conc_files[int(match.group(1))] = path
 
 if args.frames:
     part_files = part_files[-args.frames:]
