@@ -37,7 +37,7 @@ def resolve_config_paths(config_path, startpoints_config):
         profiles = tomllib.load(startpoints_file)["configurations"]
     maze_path = project_path(profiles[profile_name]["maze_file"])
     maze_meta = maze_path.parent / f"{maze_path.stem}_analysis" / "maze_metadata.toml"
-    return series_dir, maze_meta, output_dir / "path_concentration", output_dir / "jobs.txt"
+    return series_dir, maze_meta, output_dir / "path_concentration", output_dir / "jobs.txt", maze_path
 
 
 def bfs_path(maze, start, goal, wall=1, wall_repulsion=5.0):
@@ -167,9 +167,10 @@ def main():
     if not args.show:
         plt.switch_backend("Agg")
 
+    configured_maze_path = None
     if args.config:
         try:
-            configured_series, configured_meta, configured_output, configured_jobs = resolve_config_paths(
+            configured_series, configured_meta, configured_output, configured_jobs, configured_maze_path = resolve_config_paths(
                 args.config, args.startpoints_config
             )
         except (KeyError, OSError, tomllib.TOMLDecodeError, ValueError) as error:
@@ -188,8 +189,19 @@ def main():
     root = Path(args.series_dir).expanduser()
     if not root.is_absolute():
         root = Path.cwd() / root
-    meta = tomllib.loads(Path(args.maze_meta).expanduser().read_text())
-    maze, args.wall = np.loadtxt(meta["maze_file"], delimiter="\t"), meta["wall_value"]
+    maze_meta_path = Path(args.maze_meta).expanduser()
+    meta = tomllib.loads(maze_meta_path.read_text())
+    metadata_maze_path = Path(meta["maze_file"]).expanduser()
+    if not metadata_maze_path.is_file() and not metadata_maze_path.is_absolute():
+        relative_to_metadata = maze_meta_path.parent / metadata_maze_path
+        if relative_to_metadata.is_file():
+            metadata_maze_path = relative_to_metadata
+    maze_path = (
+        metadata_maze_path
+        if metadata_maze_path.is_file() or configured_maze_path is None
+        else configured_maze_path
+    )
+    maze, args.wall = np.loadtxt(maze_path, delimiter="\t"), meta["wall_value"]
     path = bfs_path(maze, tuple(meta["emitter_grid"]), tuple(meta["goal_grid"]), args.wall, args.wall_repulsion)
     jobs = read_jobs(args.jobs)
     print(f"path: {len(path)} cells (metadata path_length: {meta.get('path_length')})")

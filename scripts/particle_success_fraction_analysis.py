@@ -866,7 +866,12 @@ def main() -> int:
     if args.maze_file is not None:
         maze_path = args.maze_file.resolve()
     elif metadata_path is not None and "maze_file" in maze_metadata:
-        maze_path = _resolve_maze_file(metadata_path, maze_metadata["maze_file"])
+        metadata_maze_path = _resolve_maze_file(metadata_path, maze_metadata["maze_file"])
+        maze_path = (
+            metadata_maze_path
+            if metadata_maze_path.is_file() or profile_maze_path is None
+            else profile_maze_path
+        )
     elif profile_maze_path is not None:
         maze_path = profile_maze_path
     elif config_dict is not None and "maze_file" in config_dict and config_path is not None:
