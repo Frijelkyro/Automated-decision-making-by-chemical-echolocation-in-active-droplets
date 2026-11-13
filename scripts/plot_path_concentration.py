@@ -16,6 +16,30 @@ from collections import deque
 from scipy.ndimage import distance_transform_edt
 import heapq
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def project_path(value):
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else PROJECT_ROOT / path).resolve()
+
+
+def resolve_config_paths(config_path, startpoints_config):
+    with project_path(config_path).open("rb") as config_file:
+        config = tomllib.load(config_file)
+    series = config["series"]
+    series_dir = project_path(Path(series.get("data_root", "data")) / series["name"])
+    output_dir = project_path(Path(series.get("output_root", "output")) / series["name"])
+    profile_name = config.get("defaults", {}).get(
+        "maze_config", "Ran_maze_size_prop_to_droplet"
+    )
+    with project_path(startpoints_config).open("rb") as startpoints_file:
+        profiles = tomllib.load(startpoints_file)["configurations"]
+    maze_path = project_path(profiles[profile_name]["maze_file"])
+    maze_meta = maze_path.parent / f"{maze_path.stem}_analysis" / "maze_metadata.toml"
+    return series_dir, maze_meta, output_dir / "path_concentration", output_dir / "jobs.txt"
+
+
 def bfs_path(maze, start, goal, wall=1, wall_repulsion=5.0):
     """Shortest path with wall repulsion via Dijkstra on a distance-transform potential."""
     open_mask = maze != wall
@@ -123,10 +147,12 @@ def plot_run(d, maze, path, args, jobs):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--series-dir", required=True, help="Series data root (e.g. data/reaper_emission_scan) or a single run/shot dir")
-    ap.add_argument("--maze-meta", default="different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_metadata.toml",
+    ap.add_argument("--config", type=Path, help="Experiment series TOML; derives data, maze metadata, jobs, and output paths.")
+    ap.add_argument("--startpoints-config", type=Path, default=PROJECT_ROOT / "maze_startpoints_configuration.toml")
+    ap.add_argument("--series-dir", help="Series data root or a single run/shot directory")
+    ap.add_argument("--maze-meta",
                     help="maze_metadata.toml (maze_file, wall_value, emitter_grid, goal_grid)")
-    ap.add_argument("--out-dir", required=True, help="Where to save the PNGs")
+    ap.add_argument("--out-dir", help="Where to save the PNGs")
     ap.add_argument("--jobs", help="Optional jobs.txt to put emission rate / reaper delay into titles")
     ap.add_argument("--pattern", default="*", help="fnmatch filter on run dir path relative to --series-dir")
     ap.add_argument("--n-curves", type=int, default=10, help="Number of evenly spaced timesteps per plot")
@@ -141,8 +167,28 @@ def main():
     if not args.show:
         plt.switch_backend("Agg")
 
-    root = Path(args.series_dir)
-    meta = tomllib.loads(Path(args.maze_meta).read_text())
+    if args.config:
+        try:
+            configured_series, configured_meta, configured_output, configured_jobs = resolve_config_paths(
+                args.config, args.startpoints_config
+            )
+        except (KeyError, OSError, tomllib.TOMLDecodeError, ValueError) as error:
+            ap.error(str(error))
+        args.series_dir = args.series_dir or str(configured_series)
+        args.maze_meta = args.maze_meta or str(configured_meta)
+        args.out_dir = args.out_dir or str(configured_output)
+        args.jobs = args.jobs or (str(configured_jobs) if configured_jobs.is_file() else None)
+    else:
+        args.maze_meta = args.maze_meta or str(
+            PROJECT_ROOT / "different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_metadata.toml"
+        )
+    if not args.series_dir or not args.out_dir:
+        ap.error("--series-dir and --out-dir are required unless --config is provided")
+
+    root = Path(args.series_dir).expanduser()
+    if not root.is_absolute():
+        root = Path.cwd() / root
+    meta = tomllib.loads(Path(args.maze_meta).expanduser().read_text())
     maze, args.wall = np.loadtxt(meta["maze_file"], delimiter="\t"), meta["wall_value"]
     path = bfs_path(maze, tuple(meta["emitter_grid"]), tuple(meta["goal_grid"]), args.wall, args.wall_repulsion)
     jobs = read_jobs(args.jobs)
