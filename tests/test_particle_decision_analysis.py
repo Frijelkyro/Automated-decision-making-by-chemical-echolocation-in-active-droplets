@@ -161,7 +161,7 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        series_dir, maze_meta, output_dir, jobs = concentration_plot.resolve_config_paths(
+        series_dir, maze_meta, output_dir, jobs, resolved_maze = concentration_plot.resolve_config_paths(
             config_path, startpoints_path
         )
 
@@ -169,6 +169,7 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
         self.assertEqual(maze_meta, self.root / "mazes" / "QJ01_analysis" / "maze_metadata.toml")
         self.assertEqual(output_dir, self.root / "output" / "demo" / "path_concentration")
         self.assertEqual(jobs, self.root / "output" / "demo" / "jobs.txt")
+        self.assertEqual(resolved_maze, self.root / "mazes" / "QJ01.tsv")
 
     def test_concentration_plot_cli_runs_from_experiment_config(self):
         maze_path = self.root / "mazes" / "QJ01.tsv"
@@ -195,7 +196,8 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
         metadata_path = self.root / "mazes" / "QJ01_analysis" / "maze_metadata.toml"
         metadata_path.parent.mkdir()
         metadata_path.write_text(
-            f'maze_file = "{maze_path}"\nwall_value = 1\nemitter_grid = [2, 1]\n'
+            'maze_file = "/old-host/old-project/different_mazes/QJ01.tsv"\n'
+            'wall_value = 1\nemitter_grid = [2, 1]\n'
             'goal_grid = [2, 3]\npath_length = 3\n',
             encoding="utf-8",
         )

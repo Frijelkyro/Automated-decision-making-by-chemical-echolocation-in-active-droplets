@@ -299,6 +299,13 @@ def test_main_config_selects_maze_profile_without_metadata(tmp_path, monkeypatch
         'emitter_position = [1, 1]\nstatic_source_position = [5, 5]\n',
         encoding="utf-8",
     )
+    metadata_dir = maze_file.parent / "QJ01_analysis"
+    metadata_dir.mkdir()
+    (metadata_dir / "maze_metadata.toml").write_text(
+        'maze_file = "/old-host/old-project/different_mazes/QJ01.tsv"\n'
+        'wall_value = 1\nemitter_grid = [5, 1]\ngoal_grid = [1, 5]\n',
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(
         "sys.argv",
