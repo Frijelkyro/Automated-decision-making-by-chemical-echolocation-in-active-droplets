@@ -1,5 +1,5 @@
 [series]
-name = "qj01_em001_rt5_200s"
+name = "qj01_em05_rt5_200s"
 data_root = "data"
 output_root = "output"
 
@@ -14,9 +14,9 @@ test_run = false
 resume_simulation = false
 
 [[regimes]]
-name = "qj01_em001_rt5"
+name = "qj01_em05_rt5"
 shots = 4
 
 [regimes.grid]
-emission_rate = [0.01]
+emission_rate = [0.5]
 grim_reaper_delay = [5.0]
