@@ -347,7 +347,8 @@ parameter_dict = {
 # --------------- time tracking ---------------------
 init_duration_perf_metric = perf_counter() - init_t0  # time tracking
 print(
-    f"Initialization time: {init_duration_perf_metric:.3f} s | particles: {num_particles} | n_steps/loop: {n_steps} | maze.shape: {maze.shape} | concentration shape: {conc.shape} | emission_rate: {emission_rate} | dt: {dt}"
+    f"Initialization time: {init_duration_perf_metric:.3f} s | particles: {num_particles} | n_steps/loop: {n_steps} | maze.shape: {maze.shape} | concentration shape: {conc.shape} | emission_rate: {emission_rate} | dt: {dt}",
+    flush=True,
 )
 simulation_t0 = perf_counter()  # time tracking
 n_active = active_mask.sum()

@@ -19,7 +19,7 @@ def main():
         default=ROOT / "experiments" / "simulation_series_parameters.toml",
     )
     parser.add_argument("--jobs", type=int, default=3)
-    parser.add_argument("--progress", action="store_true", help="Show GNU Parallel queue progress.")
+    parser.add_argument("--progress", "--bar", action="store_true", help="Show GNU Parallel's compact progress bar.")
     parser.add_argument("--resume", action="store_true", help="Resume using the existing GNU Parallel job log.")
     args = parser.parse_args()
 
@@ -39,7 +39,7 @@ def main():
     signature = hashlib.sha256(("\n".join(jobs) + "\n").encode()).hexdigest()
     command = [parallel, "-j", str(args.jobs), "--joblog", str(joblog)]
     if args.progress:
-        command.append("--progress")
+        command.extend(["--bar", "--line-buffer"])
     resume_simulation = config.get("defaults", {}).get("resume_simulation", False)
     if joblog.exists():
         #if not signature_file.exists() or signature_file.read_text().strip() != signature:

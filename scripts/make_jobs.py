@@ -68,7 +68,7 @@ def generate_jobs(config_path):
                     "--data-dir", str(data_dir),
                     "--output-dir", str(output_dir),
                 ])
-                jobs.append(shlex.join(args))
+                jobs.append(f"{shlex.join(args)} 2>> {shlex.quote(str(output_root / series['name'] / 'tqdm_output.log'))}")
 
     jobfile = output_root / series["name"] / "jobs.txt"
     jobfile.parent.mkdir(parents=True, exist_ok=True)
