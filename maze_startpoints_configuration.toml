@@ -10,7 +10,7 @@ exit_radius = 12.0
 
 [configurations.Ran_maze_size_prop_to_droplet]
 maze_file = "different_mazes/Ran_maze_size_prop_to_droplet.tsv"
-emitter_position = [2.1, 84.1]
+emitter_position = [2.1, 83.1]
 static_source_position = [90.2, 10.5]
 exit_radius = 20.0
 
