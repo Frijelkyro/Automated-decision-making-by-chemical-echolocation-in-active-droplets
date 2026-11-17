@@ -34,6 +34,12 @@ parser.add_argument("--emission-rate", type=float, default=0.5)
 parser.add_argument("--grim-reaper-delay", type=float, default=6.0)
 parser.add_argument("--desired-time", type=float, default=80)
 parser.add_argument("--write-every", type=int, default=100)
+parser.add_argument(
+    "--concentration-every-particle-snapshots",
+    type=int,
+    default=2,
+    help="Write one concentration snapshot for every N particle snapshots.",
+)
 parser.add_argument("--n-steps", type=int, default=100)
 parser.add_argument("--num-particles", type=int, default=60)
 parser.add_argument("--test-run", type=parse_bool, default=False)
@@ -49,6 +55,8 @@ parser.add_argument("--shot", type=int, default=0)
 parser.add_argument("--data-dir", default="data")
 parser.add_argument("--output-dir")
 args = parser.parse_args()
+if args.concentration_every_particle_snapshots < 1:
+    parser.error("--concentration-every-particle-snapshots must be at least 1")
 
 config_path = args.startpoints_config.expanduser()
 if not config_path.is_absolute():
@@ -103,7 +111,7 @@ Lx = 100.0  # domain size
 Ly = 100.0  # domain size
 n_xbins = int(Lx / dx)  # number of bins in x direction
 n_ybins = int(Ly / dx)  # number of bins in y direction
-n_steps = args.n_steps  # number of time steps 40000
+n_steps = args.n_steps  # number of time steps until a loop is done 40000
 time_loop = 2250  # number of time loops
 dt = args.dt  # time step size
 desired_time = args.desired_time
@@ -145,6 +153,7 @@ file_prefix_part = os.path.join(data, "part")
 
 # maze = maze_from_file('different_mazes/empty_box.tsv')
 maze = maze_from_file(str(maze_file))
+free_cell_index_map = build_free_cell_index_map(maze)
 wall = np.transpose(np.where(maze == 0))
 
 exit_radius = configured_exit_radius
@@ -321,6 +330,7 @@ parameter_dict = {
     "dt": dt,
     "gamma": gamma,
     "write_every": write_every,
+    "concentration_every_particle_snapshots": args.concentration_every_particle_snapshots,
     "num_particles": num_particles,
     "time_loop": time_loop,
     "birth_times": birth_times,
@@ -379,13 +389,19 @@ for i in pbar:
         v,
         omega,
         maze,
+        free_cell_index_map=free_cell_index_map,
         start_step=resume_step + i * n_steps,
         start_time=simulation_time,
         **parameter_dict,
     )
 
     if not exit:
-        write_param_snapshot(parameter_dict, simulation_time, resume_step + i * n_steps)
+        write_param_snapshot(
+            parameter_dict,
+            simulation_time,
+            resume_step + i * n_steps,
+            concentration=conc[0],
+        )
 
     simulation_time += (n_steps - 1) * dt
 

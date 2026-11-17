@@ -1,0 +1,23 @@
+[series]
+name = "qj01_exp20261104_rate_sweep_200s"
+data_root = "data"
+output_root = "output"
+
+[defaults]
+maze_config = "QJ01_config0"
+dt = 0.0005
+beta = -8
+grim_reaper_delay = 0.5
+desired_time = 200
+write_every = 100
+concentration_every_particle_snapshots = 100
+n_steps = 100
+test_run = false
+resume_simulation = false
+
+[[regimes]]
+name = "qj01_rates"
+shots = 5
+
+[regimes.grid]
+emission_rate = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0]

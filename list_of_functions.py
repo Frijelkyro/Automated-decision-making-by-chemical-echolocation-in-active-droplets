@@ -354,7 +354,7 @@ def write_parameters(**parameters):
     return numbered_filename
 
 
-def write_param_snapshot(parameters, simulation_time, resume_step):
+def write_param_snapshot(parameters, simulation_time, resume_step, concentration=None):
     param_filename = parameters.get("param_filename", "parameters.txt")
     state_filename = param_filename.removesuffix(".txt") + "_state.npz"
 
@@ -363,15 +363,18 @@ def write_param_snapshot(parameters, simulation_time, resume_step):
     if os.path.exists(state_filename):
         shutil.copy2(state_filename, state_filename.removesuffix(".npz") + "_checkpoint.npz")
 
-    np.savez_compressed(
-        state_filename,
-        birth_times=parameters["birth_times"],
-        active_mask=parameters["active_mask"],
-        dead_tracker=parameters["dead_tracker"],
-        exit_trigger_time=parameters["exit_trigger_time"],
-        resume_step=resume_step,
-        simulation_time=simulation_time,
-    )
+    state = {
+        "birth_times": parameters["birth_times"],
+        "active_mask": parameters["active_mask"],
+        "dead_tracker": parameters["dead_tracker"],
+        "exit_trigger_time": parameters["exit_trigger_time"],
+        "resume_step": resume_step,
+        "simulation_time": simulation_time,
+    }
+    if concentration is not None:
+        state["concentration"] = concentration
+
+    np.savez_compressed(state_filename, **state)
 
     with open(param_filename, "w") as f:
         for key, value in parameters.items():
@@ -428,13 +431,72 @@ def write_grid(grid_filename, nx, ny):
                 f.write(f"{i} {j}\n")
 
 
-def write_concentration(file_prefix, c, timestep, simulation_time, n_steps):
+def build_free_cell_index_map(maze):
+    free_cell_index_map = np.full(maze.shape, -1, dtype=np.int32)
+    free_cells = maze != 0
+    free_cell_index_map[free_cells] = np.arange(np.count_nonzero(free_cells))
+    return free_cell_index_map
+
+
+def free_cell_linear_index(x, y, free_cell_index_map):
+    return int(free_cell_index_map[x, y])
+
+
+def compress_concentration(concentration, free_cell_index_map):
+    return concentration[free_cell_index_map >= 0]
+
+
+def expand_concentration(concentration, free_cell_index_map):
+    concentration = np.asarray(concentration)
+    if concentration.shape == free_cell_index_map.shape:
+        return concentration
+
+    free_cells = free_cell_index_map >= 0
+    expected_size = np.count_nonzero(free_cells)
+    if concentration.ndim != 1 or concentration.size != expected_size:
+        raise ValueError(
+            f"Expected {expected_size} free-cell concentrations, got shape {concentration.shape}."
+        )
+
+    expanded = np.zeros(free_cell_index_map.shape, dtype=concentration.dtype)
+    expanded[free_cells] = concentration[free_cell_index_map[free_cells]]
+    return expanded
+
+
+def write_concentration(
+    file_prefix,
+    c,
+    timestep,
+    simulation_time,
+    n_steps,
+    retention_steps=None,
+    free_cell_index_map=None,
+):
+    concentration = c[timestep % n_steps]
+    if free_cell_index_map is not None:
+        concentration = compress_concentration(concentration, free_cell_index_map)
+
     np.savez(
         f"{file_prefix}_{timestep}.npz",
         timestep=timestep,
         simulation_time=simulation_time,
-        concentration=c[timestep % n_steps],
+        concentration=concentration,
+        grid_shape=c.shape[1:],
     )
+    if retention_steps is not None:
+        prune_concentration_snapshots(file_prefix, timestep, retention_steps)
+
+
+def prune_concentration_snapshots(file_prefix, current_timestep, retention_steps):
+    oldest_timestep = current_timestep - retention_steps
+    directory = os.path.dirname(file_prefix) or "."
+    prefix = os.path.basename(file_prefix)
+    pattern = re.compile(rf"{re.escape(prefix)}_(\d+)\.npz")
+
+    for filename in os.listdir(directory):
+        match = pattern.fullmatch(filename)
+        if match and int(match.group(1)) < oldest_timestep:
+            os.remove(os.path.join(directory, filename))
 
 
 def write_particles(
@@ -481,6 +543,7 @@ def chemical_solver(
     velocity,
     ang_velocity,
     maze,
+    free_cell_index_map=None,
     start_step=0,
     start_time=0.0,
     **kwargs,
@@ -515,6 +578,9 @@ def chemical_solver(
     gamma = kwargs.get("gamma", 1)
     time_loop = kwargs.get("time_loop", 1)
     write_every = kwargs.get("write_every", 1)
+    concentration_every_particle_snapshots = kwargs.get(
+        "concentration_every_particle_snapshots", 1
+    )
     num_particles = kwargs.get("num_particles", 1)
     param_filename = kwargs.get("param_filename", 1)
     grid_filename = kwargs.get("grid_filename", 1)
@@ -545,6 +611,11 @@ def chemical_solver(
     grim_reaper_delay_time = grim_reaper_delay
 
     nt, nx, ny = c.shape
+    if free_cell_index_map is None:
+        free_cell_index_map = build_free_cell_index_map(maze)
+    if write_every < 1 or concentration_every_particle_snapshots < 1:
+        raise ValueError("Snapshot intervals must be at least 1 timestep/frame.")
+    concentration_interval = write_every * concentration_every_particle_snapshots
     wall = maze == 0
     x_diff = np.diff(maze, axis=1)
     y_diff = np.diff(maze, axis=0)
@@ -867,6 +938,8 @@ def chemical_solver(
                     timestep,
                     simulation_time,
                     n_steps,
+                    retention_steps=2 * n_steps,
+                    free_cell_index_map=free_cell_index_map,
                 )
 
                 write_particles(
@@ -903,8 +976,7 @@ def chemical_solver(
             write_parameters(**kwargs)
             write_grid(grid_filename, nx, ny)
 
-        if local_step % write_every == 0:
-            write_concentration(file_prefix_conc, c, timestep, simulation_time, n_steps)
+        if timestep % write_every == 0:
             write_particles(
                 file_prefix_part,
                 position,
@@ -918,6 +990,16 @@ def chemical_solver(
                 timestep,
                 simulation_time,
                 num_particles,
+            )
+        if timestep % concentration_interval == 0:
+            write_concentration(
+                file_prefix_conc,
+                c,
+                timestep,
+                simulation_time,
+                n_steps,
+                retention_steps=2 * n_steps,
+                free_cell_index_map=free_cell_index_map,
             )
 
         # exit condition
@@ -945,7 +1027,15 @@ def chemical_solver(
         # Check if all particles have successfully exited or died
         has_exited_or_died = np.isfinite(exit_trigger_time) | dead_tracker
         if np.all(has_exited_or_died):
-            write_concentration(file_prefix_conc, c, timestep, simulation_time, n_steps)
+            write_concentration(
+                file_prefix_conc,
+                c,
+                timestep,
+                simulation_time,
+                n_steps,
+                retention_steps=2 * n_steps,
+                free_cell_index_map=free_cell_index_map,
+            )
             write_particles(
                 file_prefix_part,
                 position,

@@ -1,6 +1,7 @@
 import ast
 import os
 import numpy as np
+from list_of_functions import build_free_cell_index_map, expand_concentration
 
 
 def _read_parameter_file(filename):
@@ -21,9 +22,11 @@ def _read_parameter_file(filename):
     return parameters
 
 
-def _read_concentration(filename, n_steps):
+def _read_concentration(filename, n_steps, free_cell_index_map):
     with np.load(filename) as data:
-        concentration = data["concentration"]
+        concentration = expand_concentration(
+            data["concentration"], free_cell_index_map
+        )
 
     c = np.zeros((n_steps, *concentration.shape), dtype=concentration.dtype)
     c[0] = concentration
@@ -66,6 +69,11 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
         exit_trigger_time = state["exit_trigger_time"]
         resume_step = int(state["resume_step"])
         resume_time = float(state["simulation_time"])
+        checkpoint_concentration = (
+            state["concentration"].copy()
+            if "concentration" in state.files
+            else None
+        )
 
     num_particles = int(old["num_particles"])
     conc_prefix = os.path.join(data, os.path.basename(old["file_prefix_conc"]))
@@ -79,10 +87,18 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
                 if step > resume_step:
                     os.remove(os.path.join(data, filename))
 
-    conc = _read_concentration(
-        f"{conc_prefix}_{resume_step}.npz",
-        n_steps,
-    )
+    if checkpoint_concentration is None:
+        conc = _read_concentration(
+            f"{conc_prefix}_{resume_step}.npz",
+            n_steps,
+            build_free_cell_index_map(maze),
+        )
+    else:
+        conc = np.zeros(
+            (n_steps, *checkpoint_concentration.shape),
+            dtype=checkpoint_concentration.dtype,
+        )
+        conc[0] = checkpoint_concentration
 
     p, theta, v, omega = _read_particles(
         f"{part_prefix}_{resume_step}.npz",
@@ -90,7 +106,10 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
         n_steps,
     )
     print(f"using particle file: {part_prefix}_{resume_step}.npz")
-    print(f"using conc file: {conc_prefix}_{resume_step}.npz")
+    if checkpoint_concentration is None:
+        print(f"using conc file: {conc_prefix}_{resume_step}.npz")
+    else:
+        print("using concentration from checkpoint state")
 
     return (
         conc,

@@ -1,4 +1,6 @@
 import os, glob, ast, argparse, re
+from bisect import bisect_right
+from pathlib import Path
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -8,13 +10,14 @@ from matplotlib.colors import Normalize
 from tqdm import tqdm
 from time import perf_counter
 from maze_functions import maze_from_file
+from list_of_functions import build_free_cell_index_map, expand_concentration
 
 print("started video rendering")
 t0 = perf_counter()
 
 parser = argparse.ArgumentParser(description="Render a simulation shot to MP4.")
 parser.add_argument("--data", default="./data", help="Shot data directory.")
-parser.add_argument("--maze", default="./different_mazes/Ran_maze_size_prop_to_droplet.tsv")
+parser.add_argument("--maze", help="Maze TSV; defaults to the maze recorded in the shot parameters.")
 parser.add_argument("--frames", type=int, default=400, help="Maximum frames; 0 renders all frames.")
 parser.add_argument("--output", help="Output MP4 path; defaults to particle_trajectory.mp4 in the shot directory.")
 args = parser.parse_args()
@@ -22,7 +25,6 @@ if args.frames < 0:
     parser.error("--frames must be zero or a positive integer")
 
 DATA = args.data
-MAZE = args.maze
 PARAM = os.path.join(DATA, "param.txt")
 if not os.path.isfile(PARAM):
     PARAM = PARAM.removesuffix(".txt") + "_checkpoint.txt"
@@ -42,6 +44,16 @@ with open(PARAM) as f:
             params[k] = v
 
 # Grid / maze
+maze_path = Path(
+    args.maze
+    or params.get(
+        "maze_file",
+        "./different_mazes/Ran_maze_size_prop_to_droplet.tsv",
+    )
+).expanduser()
+if not maze_path.is_absolute():
+    maze_path = Path(__file__).resolve().parent / maze_path
+
 with open(GRID) as f:
     lines = f.read().splitlines()
 
@@ -51,7 +63,8 @@ box = np.array(
     dtype=float,
 )
 
-maze = maze_from_file(MAZE)
+maze = maze_from_file(str(maze_path))
+free_cell_index_map = build_free_cell_index_map(maze)
 wall = np.argwhere(maze == 0)
 source = np.asarray(params["static_source_position"], float)
 radius = float(params.get("exit_radius", 20))
@@ -72,18 +85,35 @@ for path in glob.glob(os.path.join(DATA, "conc_*.npz")):
     if match:
         conc_files[int(match.group(1))] = path
 
+conc_timestamps = sorted(conc_files)
+if not conc_timestamps:
+    raise RuntimeError("No concentration NPZ files found.")
+
+particle_snapshots = [
+    (timestep, filename)
+    for timestep, filename in zip(timestamps, part_files)
+    if timestep >= conc_timestamps[0]
+]
+timestamps = [timestep for timestep, _ in particle_snapshots]
+part_files = [filename for _, filename in particle_snapshots]
+
 if args.frames:
     part_files = part_files[-args.frames:]
     timestamps = timestamps[-args.frames:]
 
 if not timestamps:
-    raise RuntimeError("No particle NPZ files found.")
+    raise RuntimeError("No particle snapshots overlap the retained concentration data.")
+
+particle_conc_timestamps = [
+    conc_timestamps[bisect_right(conc_timestamps, timestep) - 1]
+    for timestep in timestamps
+]
 
 # Concentration range
 vmin, vmax = np.inf, -np.inf
 
 for ts, filename in tqdm(
-    conc_files.items(),
+    sorted(conc_files.items()),
     desc="Scanning concentrations",
     unit="frame",
 ):
@@ -109,18 +139,14 @@ with np.load(part_files[0]) as d:
 
 npart = len(x0)
 
-first_conc = None
-if timestamps[0] in conc_files:
-    with np.load(conc_files[timestamps[0]]) as d:
-        first_conc = d["concentration"]
+first_conc_timestep = particle_conc_timestamps[0]
+with np.load(conc_files[first_conc_timestep]) as d:
+    first_conc = expand_concentration(
+        d["concentration"], free_cell_index_map
+    )
 
 # Figure
 fig, ax = plt.subplots(figsize=(10, 8))
-
-if first_conc is None:
-    raise RuntimeError(
-        f"No concentration data found for timestep {timestamps[0]}"
-    )
 
 image = ax.imshow(
     first_conc.T,
@@ -168,6 +194,7 @@ scatter = ax.scatter(
     y0,
     s=49,
 )
+displayed_conc_timestep = [first_conc_timestep]
 
 # Optional trajectories
 trail_lines = []
@@ -215,10 +242,16 @@ def update(i):
         np.column_stack((x, y))
     )
 
-    # Concentration
-    if ts in conc_files:
-        with np.load(conc_files[ts]) as d:
-            image.set_data(d["concentration"].T)
+    # Hold the last concentration snapshot between heatmap updates.
+    concentration_timestep = particle_conc_timestamps[i]
+    if concentration_timestep != displayed_conc_timestep[0]:
+        with np.load(conc_files[concentration_timestep]) as d:
+            image.set_data(
+                expand_concentration(
+                    d["concentration"], free_cell_index_map
+                ).T
+            )
+        displayed_conc_timestep[0] = concentration_timestep
 
     # Trajectories
     if SHOW_TRAJECTORIES:

@@ -16,6 +16,7 @@ PARAMETER_FLAGS = {
     "grim_reaper_delay": "--grim-reaper-delay",
     "desired_time": "--desired-time",
     "write_every": "--write-every",
+    "concentration_every_particle_snapshots": "--concentration-every-particle-snapshots",
     "n_steps": "--n-steps",
     "num_particles": "--num-particles",
     "test_run": "--test-run",

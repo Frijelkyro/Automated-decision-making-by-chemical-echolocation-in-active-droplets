@@ -20,7 +20,7 @@ Benno Liebchen.
 
 - Runs time-dependent simulations of a scalar chemical field coupled to particle motion inside maze-shaped domains.
 - Supports moving and static point sources, optional advection, chemotactic response, particle–particle interactions (Lennard-Jones style), wall avoidance, and self-propulsion.
-- Writes per-timestep concentration (`data/conc_*.txt`) and particle (`data/part_*.txt`) outputs and can render a trajectory video (`data/particle_trajectory.mp4`).
+- Writes particle snapshots at the `--write-every` timestep interval and concentration snapshots at a configurable multiple of that interval. Only concentration snapshots within the latest `2 * n_steps` timesteps are retained; particle snapshots are kept for video rendering.
 
 
 ## File descriptions
@@ -63,8 +63,8 @@ By default the example driver writes outputs into `data/` (see `maze_cluster_scr
 
 - `data/param.txt` — recorded simulation parameters
 - `data/grid.txt` — grid description
-- `data/conc_*.txt` — concentration snapshots
-- `data/part_*.txt` — particle snapshots
+- `data/conc_*.npz` — concentration snapshots, retained within the latest `2 * n_steps` timesteps
+- `data/part_*.npz` — particle snapshots
 - `data/particle_trajectory.mp4` — rendered video (created by `video_maker.py`)
 
 ### Experiment series
@@ -114,6 +114,8 @@ n_steps = 4000
 
 ## Output format
 
-- Concentration files (`data/conc_<t>.txt`) use a small header then a flat numeric matrix that `numpy.loadtxt(..., skiprows=3)` can read. See `list_of_functions.write_concentration` for the writer format.
-- Particle files (`data/part_<t>.txt`) include a header and columns: `particle_id x y theta vx vy omega f_spx f_spy f_chemx f_chemy f_intx f_inty f_wallx f_wally`.
+- Concentration files (`data/conc_<t>.npz`) contain `timestep`, `simulation_time`, `grid_shape`, and a one-dimensional `concentration` array with values only for free maze cells. Readers reconstruct the 2D grid from the recorded maze geometry; older full-grid snapshots remain readable.
+- Particle files (`data/part_<t>.npz`) contain `timestep`, `simulation_time`, and per-particle position, velocity, orientation, and angular velocity arrays.
+
+`--concentration-every-particle-snapshots` controls the heatmap cadence: `2` writes one concentration snapshot for every two particle snapshots. The video holds each heatmap while displaying the intervening particle snapshots; it renders only the particle history covered by the retained concentration snapshots. The default is `2`.
 

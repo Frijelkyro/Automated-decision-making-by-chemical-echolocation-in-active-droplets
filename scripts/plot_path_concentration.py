@@ -15,6 +15,7 @@ import tomllib
 from collections import deque
 from scipy.ndimage import distance_transform_edt
 import heapq
+from list_of_functions import build_free_cell_index_map, expand_concentration
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,9 +75,13 @@ def bfs_path(maze, start, goal, wall=1, wall_repulsion=5.0):
     return path[::-1]
 
 
-def load_conc(f, shape, k=1):
+def load_conc(f, shape, k=1, free_cell_index_map=None):
     """conc_*.npz['concentration'] lives in the sim frame (= rot90(TSV, -1)); rotate back into TSV frame."""
-    c = np.rot90(np.load(f)["concentration"], k)
+    with np.load(f) as data:
+        c = data["concentration"]
+    if free_cell_index_map is not None:
+        c = expand_concentration(c, free_cell_index_map)
+    c = np.rot90(c, k)
     return c if c.shape == shape else None
 
 def read_jobs(p):
@@ -92,7 +97,7 @@ def read_jobs(p):
     return jobs
 
 
-def plot_run(d, maze, path, args, jobs):
+def plot_run(d, maze, path, args, jobs, free_cell_index_map):
     m = re.fullmatch(r"shot_(\d+)", d.name)
     rid, shot = (d.parent if m else d).name, int(m[1]) if m else 0
     j = jobs.get((rid, shot), {})
@@ -110,7 +115,19 @@ def plot_run(d, maze, path, args, jobs):
     if not steps:
         return print(f"WARN  no conc_*.npz in {d}")
     idx = np.unique(np.linspace(0, len(steps) - 1, min(args.n_curves, len(steps)), dtype=int))
-    data = [(steps[i][0], c) for i in idx if (c := load_conc(steps[i][1], maze.shape, args.rot90)) is not None]
+    data = [
+        (steps[i][0], c)
+        for i in idx
+        if (
+            c := load_conc(
+                steps[i][1],
+                maze.shape,
+                args.rot90,
+                free_cell_index_map,
+            )
+        )
+        is not None
+    ]
     if not data:
         return print(f"WARN  no concentration file in {d} matches maze shape {maze.shape}")
 
@@ -202,6 +219,8 @@ def main():
         else configured_maze_path
     )
     maze, args.wall = np.loadtxt(maze_path, delimiter="\t"), meta["wall_value"]
+    simulation_free_mask = np.rot90(maze != args.wall, k=-1)
+    free_cell_index_map = build_free_cell_index_map(simulation_free_mask)
     path = bfs_path(maze, tuple(meta["emitter_grid"]), tuple(meta["goal_grid"]), args.wall, args.wall_repulsion)
     jobs = read_jobs(args.jobs)
     print(f"path: {len(path)} cells (metadata path_length: {meta.get('path_length')})")
@@ -212,7 +231,7 @@ def main():
     print(f"{len(runs)} run(s) found")
     for d in runs:
         try:
-            plot_run(d, maze, path, args, jobs)
+            plot_run(d, maze, path, args, jobs, free_cell_index_map)
         except Exception as e:
             print(f"ERROR {d}: {e}")
 

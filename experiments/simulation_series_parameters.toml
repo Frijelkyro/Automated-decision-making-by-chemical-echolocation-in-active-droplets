@@ -9,6 +9,7 @@ beta = -8
 grim_reaper_delay = 6.0
 desired_time = 400
 write_every = 100
+concentration_every_particle_snapshots = 2
 n_steps = 100
 test_run = false
 resume_simulation = true
