@@ -101,14 +101,6 @@ def maze_from_file(file_path):
     return rotated_data
 
 
-# function to load concentrations from a file
-def load_c_from_file(maze, filename):
-    nx = maze.shape[0]
-    ny = maze.shape[1]
-    c = np.loadtxt(filename, skiprows=5).reshape((nx, ny))
-    return c
-
-
 # function to load trajectory from a file
 def load_traj_from_file(filename):
     traj = np.loadtxt(filename, skiprows=1)

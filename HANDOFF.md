@@ -16,3 +16,23 @@
   - Baseline command: `.venv/bin/python maze_cluster_script.py --seed 12345 --test-run true --desired-time 20 --dt 0.0005 --n-steps 100 --num-particles 10 --emission-rate 0.5 --data-dir <data-dir> --output-dir <output-dir>`
 - Known issues / TODO for later tasks:
   - Runtime output is wall-clock-dependent and is not written to files.
+
+## T1 Housekeeping
+- Files changed:
+  - `maze_cluster_script.py`
+  - `list_of_functions.py`
+  - `maze_functions.py`
+  - `scripts/run_parallel.py`
+  - `master_run.sh` (deleted)
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - None.
+- Behavior changes vs. before (esp. physics/RNG):
+  - Housekeeping only. `drops_added_incremental` always used its enabled behavior, and the unused alternate branch was removed.
+  - Advection logic and the `update_flow_field` call path were retained because advection remains configurable.
+  - No RNG or physics equations changed.
+- How to test (exact command):
+  - `.venv/bin/python -m unittest tests.test_seed_regression`
+  - `python -m compileall -q maze_cluster_script.py list_of_functions.py maze_functions.py scripts/run_parallel.py`
+- Known issues / TODO for later tasks:
+  - Removed functions/code: `compute_birth_times`, `load_c_from_file`, `initialize_c_from_file`, `noflux`, `full_traj`, `column_names`, and the `drops_added_incremental = False` branch.

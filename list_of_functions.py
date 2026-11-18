@@ -16,22 +16,6 @@ def initialize_c(c_initial, n_steps, maze):
     return c
 
 
-def initialize_c_from_file(c_initial, n_steps, maze, filename):
-    nx = maze.shape[0]
-    ny = maze.shape[1]
-    c = np.full((n_steps, nx, ny), c_initial, dtype=np.float32)
-    c[0] = np.loadtxt(filename, skiprows=3).reshape((nx, ny))
-    return c
-
-
-def compute_birth_times(num_particles, emission_rate):
-    emission_interval = 1.0 / emission_rate
-    return np.array(
-        [int(round(i * emission_interval)) for i in range(num_particles)],
-        dtype=int,
-    )
-
-
 def active_particle_mask(simulation_time, birth_times):
     return simulation_time >= birth_times
 
@@ -123,28 +107,7 @@ def update_flow_field(
     return ux, uy
 
 
-# define noflux boundary condition
-def noflux(
-    conc, t, x_diff_indices, y_diff_indices, x_diff_neg_indices, y_diff_neg_indices
-):
-    conc[t, x_diff_indices[:, 0], x_diff_indices[:, 1]] = conc[
-        t, x_diff_indices[:, 0], x_diff_indices[:, 1] + 1
-    ]
-    conc[t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1] + 1] = conc[
-        t, x_diff_neg_indices[:, 0], x_diff_neg_indices[:, 1]
-    ]
-
-    conc[t, y_diff_indices[:, 0], y_diff_indices[:, 1]] = conc[
-        t, y_diff_indices[:, 0] + 1, y_diff_indices[:, 1]
-    ]
-    conc[t, y_diff_neg_indices[:, 0] + 1, y_diff_neg_indices[:, 1]] = conc[
-        t, y_diff_neg_indices[:, 0], y_diff_neg_indices[:, 1]
-    ]
-
-    return conc
-
-
-# define noflux boundary condition for a maze
+# Define the no-flux boundary condition for a maze
 def noflux_maze(
     conc,
     t,
@@ -539,9 +502,7 @@ def chemical_solver(
         kwargs.get("emitter_position", (0.0, 0.0)), dtype=np.float32
     )
     permeability = kwargs.get("permeability", 0.0)
-    drops_added_incremental = kwargs.get("drops_added_incremental", True)
     exit_wall_mask = kwargs.get("exit_wall_mask", None)
-    # grim_reaper_delay_timestep = grim_reaper_delay / dt
     grim_reaper_delay_time = grim_reaper_delay
 
     nt, nx, ny = c.shape
@@ -598,7 +559,7 @@ def chemical_solver(
     px_bins = np.zeros(num_particles, dtype=int)
     py_bins = np.zeros(num_particles, dtype=int)
 
-    for local_step in range(nt - 1):  # this iterates from 0 to 48
+    for local_step in range(nt - 1):
 
         timestep = start_step + local_step
         simulation_time = start_time + local_step * dt
@@ -606,17 +567,16 @@ def chemical_solver(
         t = local_step
         t_next = local_step + 1  # goes from 1 to 49
 
-        if drops_added_incremental:
-            spawning_queue = np.where(
-                (birth_times <= simulation_time) & ~active_mask & ~dead_tracker
-            )[0]
+        spawning_queue = np.where(
+            (birth_times <= simulation_time) & ~active_mask & ~dead_tracker
+        )[0]
 
-            if len(spawning_queue) and not np.any(
-                birth_zone_map[px_bins[active_mask], py_bins[active_mask]]
-            ):
-                i = spawning_queue[0]
-                active_mask[i] = True
-                birth_times[i] = simulation_time
+        if len(spawning_queue) and not np.any(
+            birth_zone_map[px_bins[active_mask], py_bins[active_mask]]
+        ):
+            i = spawning_queue[0]
+            active_mask[i] = True
+            birth_times[i] = simulation_time
 
         inactive_mask = ~active_mask
         position[inactive_mask, t_next, :] = position[inactive_mask, t, :]
@@ -824,7 +784,7 @@ def chemical_solver(
         # Safety check: particles must stay away from grid boundaries
         # ---------------------------------------------------------
         # Requires at least one-cell padding because force calculations
-        # access neighbouring cells.
+        # access neighboring cells.
         particle_positions_now = position[active_mask, t + 1, :]
 
         if particle_positions_now.size > 0:
@@ -856,7 +816,7 @@ def chemical_solver(
                 )
 
                 # clear the last param.txt as the param_checkpoint should be used
-                # in case the resume sim crashes immediatly we dont want a param.txt to be left behind
+                # in case the resume sim crashes immediately we dont want a param.txt to be left behind
                 # TODO is that still necessary with the param_checkpoint.txt implementation?
                 os.remove(param_filename) if os.path.exists(param_filename) else None
 

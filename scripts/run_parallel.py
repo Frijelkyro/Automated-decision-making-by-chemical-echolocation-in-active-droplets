@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import shutil
 import subprocess
 import tomllib
@@ -35,24 +34,15 @@ def main():
 
     jobs, jobfile = generate_jobs(config_path)
     joblog = jobfile.with_name("joblog")
-    signature_file = jobfile.with_suffix(".sha256")
-    signature = hashlib.sha256(("\n".join(jobs) + "\n").encode()).hexdigest()
     command = [parallel, "-j", str(args.jobs), "--joblog", str(joblog)]
     if args.progress:
         command.extend(["--bar", "--line-buffer"])
     resume_simulation = config.get("defaults", {}).get("resume_simulation", False)
     if joblog.exists():
-        #if not signature_file.exists() or signature_file.read_text().strip() != signature:
-        #    parser.error(
-        #        "Existing series job log does not match this job list; "
-        #        "keep the configuration unchanged or use a new series name"
-        #    )
         if resume_simulation:
             command.append("--resume-failed")
         elif args.resume:
             command.append("--resume")
-    else:
-        signature_file.write_text(signature + "\n")
 
     with jobfile.open() as job_input:
         subprocess.run(command, stdin=job_input, cwd=ROOT, check=True)
