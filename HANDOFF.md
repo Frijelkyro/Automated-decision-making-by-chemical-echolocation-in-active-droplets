@@ -129,3 +129,52 @@
   - Render a fresh shot: `.venv/bin/python video_maker_testrun.py --data <shot-data-dir> --frames 5 --output <output.mp4>`
 - Known issues / TODO for later tasks:
   - Checkpoint bundles still contain full concentration state; future tasks may compact embedded checkpoint concentrations too.
+
+## T6 Skeleton script: disjoint, configurable zones
+- Files changed:
+  - `scripts/maze_skeleton_path.py`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/junction_zones.toml`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/zone_masks.npz`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_metadata.toml`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_decision_zones.png`
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - `zone_masks.npz` keys are `<Jxx>_before`, `<Jxx>_correct`, `<Jxx>_wrong`, plus `junction_ids`, `maze_hash`, and `shape`.
+  - Mask shape is the simulation orientation `(ny, nx)` produced by `np.rot90(mask, -1)`; `shape` is the stored simulation shape.
+  - Added `--before-length` and `--zone-length`; defaults are `4` and `7`.
+  - `junction_zones.toml` uses `[defaults]` keys `before_length`, `zone_length`, `maze_hash`, and `junction_ids`, with `[junctions.Jxx]` overrides and a raw-grid `center` array.
+- Behavior changes vs. before (esp. physics/RNG):
+  - All labels use one nearest-skeleton-cell expansion pass.
+  - `before` covers at least the configured number of route cells toward the junction and can cross earlier junctions.
+  - `correct`/`wrong` are depth-limited BFS branches from the junction cluster.
+  - Correct and wrong masks are asserted disjoint; junctions inside the configured exit radius are skipped.
+- How to test (exact command):
+  - `.venv/bin/python scripts/maze_skeleton_path.py --maze different_mazes/Ran_maze_size_prop_to_droplet.tsv`
+  - The run verifies each saved mask against `grid_to_sim` and asserts every junction's correct/wrong intersection is empty.
+- Known issues / TODO for later tasks:
+  - `zone_extent=compact` is retained for compatibility, but gate construction remains driven by the `before_length` and `zone_length` BFS depths.
+
+## T6 Follow-up: Per-junction circular gates
+- Files changed:
+  - `scripts/maze_skeleton_path.py`
+  - `scripts/particle_decision_analysis.py`
+  - `tests/test_particle_decision_analysis.py`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/zone_config.toml`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_decision_zones.png`
+- New/changed interfaces:
+  - `zone_config.toml` supports per-junction `before`, `correct`, and `wrong` distances.
+  - Optional raw-grid keys are `center`, `before_center`, `correct_center`, `wrong_center`, plus `before_radius`, `correct_radius`, and `wrong_radius`.
+  - Masks are now local circular/free-corridor gates rather than nearest-skeleton-corridor expansions.
+- Behavior changes:
+  - Plot overlays no longer cover the whole maze corridor.
+  - Magenta crosses mark skeleton dead ends.
+  - Correct and wrong masks remain asserted disjoint.
+  - The particle decision loader accepts the NPZ simulation `shape` key.
+
+### T6 radius override
+- Files changed:
+  - `scripts/maze_skeleton_path.py`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/junction_zones.toml`
+- Interface:
+  - `[defaults]` accepts `radius = 3.5`.
+  - `[junctions.Jxx]` accepts `radius`; it applies to before, correct, and wrong gates.

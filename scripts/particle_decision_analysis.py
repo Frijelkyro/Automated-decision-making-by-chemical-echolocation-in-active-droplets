@@ -41,10 +41,11 @@ def resolve_config_paths(config_path, startpoints_path):
 def load_maze(directory):
     directory = Path(directory)
     meta = tomllib.loads((directory / "maze_metadata.toml").read_text())
-    shape, dx = tuple(meta["grid_shape"]), float(meta["dx"])
+    dx = float(meta["dx"])
     zones = defaultdict(dict)
 
     with np.load(directory / "zone_masks.npz") as data:
+        shape = tuple(int(v) for v in data["shape"]) if "shape" in data.files else tuple(meta["grid_shape"])
         for name in data.files:
             for suffix in ("before", "correct", "wrong"):
                 ending = "_" + suffix
