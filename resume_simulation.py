@@ -2,6 +2,7 @@ import ast
 import os
 import random
 import numpy as np
+from storage import read_concentration
 
 
 def _read_parameter_file(filename):
@@ -22,11 +23,14 @@ def _read_parameter_file(filename):
     return parameters
 
 
-def _read_concentration(filename, n_steps):
-    with np.load(filename) as data:
-        concentration = data["concentration"]
+def _read_concentration(filename, n_steps, maze=None):
+    concentration = read_concentration(filename, os.path.dirname(filename), maze)
+    if concentration.ndim == 2:
+        shape = concentration.shape
+    else:
+        shape = concentration.shape[-2:]
 
-    c = np.zeros((n_steps, *concentration.shape), dtype=concentration.dtype)
+    c = np.zeros((n_steps, *shape), dtype=concentration.dtype)
     c[0] = concentration
     return c
 
@@ -98,7 +102,11 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
                     os.remove(os.path.join(data, filename))
 
     if concentration is None:
-        conc = _read_concentration(f"{conc_prefix}_{resume_step}.npz", n_steps)
+        conc = _read_concentration(
+            f"{conc_prefix}_{resume_step}.npz",
+            n_steps,
+            maze,
+        )
     else:
         conc = np.zeros((n_steps, *concentration.shape), dtype=concentration.dtype)
         conc[0] = concentration

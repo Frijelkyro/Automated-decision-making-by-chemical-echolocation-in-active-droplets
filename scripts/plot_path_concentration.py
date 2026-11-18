@@ -6,7 +6,7 @@ Examples:
       --jobs output/reaper_emission_scan/jobs.txt --out-dir plots/reaper_emission_scan
   python plot_path_concentration.py --series-dir data/reaper_emission_scan --pattern 'quadratic_c000*' --show
 """
-import argparse, re, shlex
+import argparse, re, shlex, sys
 from fnmatch import fnmatch
 from pathlib import Path
 import numpy as np
@@ -15,8 +15,11 @@ import tomllib
 from collections import deque
 from scipy.ndimage import distance_transform_edt
 import heapq
+from storage import read_concentration
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def project_path(value):
@@ -76,7 +79,10 @@ def bfs_path(maze, start, goal, wall=1, wall_repulsion=5.0):
 
 def load_conc(f, shape, k=1):
     """conc_*.npz['concentration'] lives in the sim frame (= rot90(TSV, -1)); rotate back into TSV frame."""
-    c = np.rot90(np.load(f)["concentration"], k)
+    c = read_concentration(f, f.parent)
+    if c.ndim == 3:
+        c = c[0]
+    c = np.rot90(c, k)
     return c if c.shape == shape else None
 
 def read_jobs(p):

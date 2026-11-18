@@ -8,6 +8,7 @@ from matplotlib.colors import Normalize
 from tqdm import tqdm
 from time import perf_counter
 from maze_functions import maze_from_file
+from storage import read_concentration
 
 print("started video rendering")
 t0 = perf_counter()
@@ -105,13 +106,16 @@ for ts, filename in tqdm(
     desc="Scanning concentrations",
     unit="frame",
 ):
-    with np.load(filename) as d:
-        c = d["concentration"]
+    c = read_concentration(filename, DATA, maze)
+    if c.ndim == 3:
+        c = c[0]
+    else:
         c = c[np.isfinite(c) & (c > 0)]
+    c = c[np.isfinite(c) & (c > 0)]
 
-        if c.size:
-            vmin = min(vmin, c.min())
-            vmax = max(vmax, c.max())
+    if c.size:
+        vmin = min(vmin, c.min())
+        vmax = max(vmax, c.max())
 
 if not np.isfinite(vmin):
     vmin = 0
@@ -131,8 +135,9 @@ first_conc = None
 earlier_conc_steps = [ts for ts in conc_files if ts <= timestamps[0]]
 if earlier_conc_steps:
     first_conc_step = max(earlier_conc_steps)
-    with np.load(conc_files[first_conc_step]) as d:
-        first_conc = d["concentration"]
+    first_conc = read_concentration(conc_files[first_conc_step], DATA, maze)
+    if first_conc.ndim == 3:
+        first_conc = first_conc[0]
 
 # Figure
 fig, ax = plt.subplots(figsize=(10, 8))
@@ -239,8 +244,10 @@ def update(i):
     earlier_conc_steps = [conc_ts for conc_ts in conc_files if conc_ts <= ts]
     if earlier_conc_steps:
         conc_ts = max(earlier_conc_steps)
-        with np.load(conc_files[conc_ts]) as d:
-            image.set_data(d["concentration"].T)
+        concentration = read_concentration(conc_files[conc_ts], DATA, maze)
+        if concentration.ndim == 3:
+            concentration = concentration[0]
+        image.set_data(concentration.T)
 
     # Trajectories
     if SHOW_TRAJECTORIES:

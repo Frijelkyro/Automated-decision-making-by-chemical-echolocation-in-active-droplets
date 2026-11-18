@@ -102,3 +102,30 @@
   - `python -m compileall -q maze_cluster_script.py list_of_functions.py resume_simulation.py video_maker_testrun.py scripts/make_jobs.py`
 - Known issues / TODO for later tasks:
   - `extra_state` is the extension point for future tracker state. Preserve it as an object/dict, or add named keys to `write_param_snapshot` and restore them in `resume_simulation_from_file`.
+
+## T5 Compact concentration storage
+- Files changed:
+  - `storage.py`
+  - `list_of_functions.py`
+  - `resume_simulation.py`
+  - `video_maker_testrun.py`
+  - `scripts/plot_path_concentration.py`
+  - `tests/test_compact_concentration.py`
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - Added `storage.build_free_index(maze)`, `storage.pack_conc(concentration, free_index)`, `storage.unpack_conc(packed, free_index, grid_shape=None)`, and `storage.cell_to_lin(row, col, free_index)`.
+  - Added `storage.write_concentration(...)` and `storage.read_concentration(...)`.
+  - Each shot writes `free_cells.npz` once with `free_index`, `maze_hash`, and `format="free_index_v1"`.
+  - Concentration snapshots use `format="free_v1"`, store only C-order free-cell values in `concentration`, and include `grid_shape` and the maze hash.
+  - Legacy full-grid concentration NPZ files remain readable by `_read_concentration`, video rendering, and path plotting.
+- Behavior changes vs. before (esp. physics/RNG):
+  - Concentration snapshots are packed without changing the live solver array or physics/RNG behavior.
+  - NPZ output is selected after timing plain and compressed writes and comparing file sizes.
+  - Mapping/hash validation prevents an incompatible maze from unpacking concentration snapshots.
+- How to test (exact command):
+  - `.venv/bin/python -m unittest tests.test_seed_regression`
+  - `.venv/bin/python -m unittest tests.test_compact_concentration`
+  - `.venv/bin/python -m compileall -q storage.py list_of_functions.py resume_simulation.py video_maker_testrun.py scripts/plot_path_concentration.py`
+  - Render a fresh shot: `.venv/bin/python video_maker_testrun.py --data <shot-data-dir> --frames 5 --output <output.mp4>`
+- Known issues / TODO for later tasks:
+  - Checkpoint bundles still contain full concentration state; future tasks may compact embedded checkpoint concentrations too.

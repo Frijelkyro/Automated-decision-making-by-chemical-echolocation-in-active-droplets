@@ -3,21 +3,21 @@
 
 [configurations.QJ01_config0]
 maze_file = "different_mazes/QJ01.tsv"
-emitter_position = [5.0, 11.05]
+emitter_position = [5.3, 12.3]
 # emitter_jitter = [0.5, 0.0]
-static_source_position = [100.2, 10.2]
+static_source_position = [110.2, 10.2]
 exit_radius = 12.0
 
 [configurations.Ran_maze_size_prop_to_droplet]
 maze_file = "different_mazes/Ran_maze_size_prop_to_droplet.tsv"
-emitter_position = [2.1, 84.1]
+emitter_position = [3.8, 82.3]
 static_source_position = [90.2, 10.5]
 exit_radius = 20.0
 
 [configurations.Testrun]
-maze_file = "different_mazes/Ran_maze_size_prop_to_droplet.tsv"
+maze_file = "different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv"
 emitter_position = [2.1, 14.8]
-static_source_position = [42.5, 10.5]
+static_source_position = [42.5, 20.5]
 exit_radius = 20.0
 
 [configurations.empty_box]

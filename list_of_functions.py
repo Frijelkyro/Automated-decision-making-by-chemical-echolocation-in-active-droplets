@@ -5,6 +5,12 @@ from dataclasses import dataclass
 
 import numpy as np
 from maze_functions import get_exit_wall_mask, leaky_exit_wall
+from storage import (
+    build_free_index,
+    maze_hash,
+    save_free_index,
+    write_concentration,
+)
 
 
 @dataclass
@@ -596,13 +602,29 @@ def save_snapshot(
     simulation_time,
     n_steps,
     save_forces=True,
+    maze=None,
 ):
-    np.savez(
-        f"{file_prefix_conc}_{timestep}.npz",
-        timestep=timestep,
-        simulation_time=simulation_time,
-        concentration=concentration[timestep % n_steps],
-    )
+    conc_filename = f"{file_prefix_conc}_{timestep}.npz"
+    conc_snapshot = concentration[timestep % n_steps]
+    if maze is None:
+        np.savez(
+            conc_filename,
+            timestep=timestep,
+            simulation_time=simulation_time,
+            concentration=conc_snapshot,
+        )
+    else:
+        directory = os.path.dirname(file_prefix_conc) or "."
+        save_free_index(directory, maze)
+        free_index = build_free_index(maze)
+        write_concentration(
+            conc_filename,
+            conc_snapshot,
+            free_index,
+            maze_hash_value=maze_hash(maze),
+            timestep=timestep,
+            simulation_time=simulation_time,
+        )
     t = timestep % particles.shape[1]
     data = {
         "timestep": timestep,
@@ -630,12 +652,27 @@ def save_concentration_snapshot(
     timestep,
     simulation_time,
     n_steps,
+    maze=None,
 ):
-    np.savez(
-        f"{file_prefix_conc}_{timestep}.npz",
+    filename = f"{file_prefix_conc}_{timestep}.npz"
+    snapshot = concentration[timestep % n_steps]
+    if maze is None:
+        np.savez(
+            filename,
+            timestep=timestep,
+            simulation_time=simulation_time,
+            concentration=snapshot,
+        )
+        return
+    directory = os.path.dirname(file_prefix_conc) or "."
+    save_free_index(directory, maze)
+    write_concentration(
+        filename,
+        snapshot,
+        build_free_index(maze),
+        maze_hash_value=maze_hash(maze),
         timestep=timestep,
         simulation_time=simulation_time,
-        concentration=concentration[timestep % n_steps],
     )
 
 
@@ -1069,6 +1106,7 @@ def chemical_solver(
                     simulation_time,
                     n_steps,
                     save_forces=True,
+                    maze=maze,
                 )
                 raise RuntimeError(
                     f"OUT-OF-BOUNDS ERROR at timestep {timestep}; "
@@ -1088,6 +1126,7 @@ def chemical_solver(
                 timestep,
                 simulation_time,
                 n_steps,
+                maze=maze,
             )
         if timestep % part_every == 0:
             save_particle_snapshot(
@@ -1146,6 +1185,7 @@ def chemical_solver(
                 simulation_time,
                 n_steps,
                 save_forces=True,
+                maze=maze,
             )
             finished = True
             exit_timestep = timestep
