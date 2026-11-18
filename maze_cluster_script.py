@@ -355,7 +355,14 @@ print(
 )
 simulation_t0 = perf_counter()  # time tracking
 n_active = active_mask.sum()
-pbar = tqdm(range(time_loop), desc="Simulation", unit="loop")
+#pbar = tqdm(range(time_loop), desc="Simulation", unit="loop")
+pbar = tqdm(
+    range(time_loop),
+    desc=f"Shot {args.shot}",
+    unit="loop",
+    disable=True,
+)
+
 global_step = resume_step + 1 if resumed_from_checkpoint else 0
 
 # ---------------- Simulation loop ------------------

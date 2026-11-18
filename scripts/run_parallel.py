@@ -36,7 +36,7 @@ def main():
     joblog = jobfile.with_name("joblog")
     command = [parallel, "-j", str(args.jobs), "--joblog", str(joblog)]
     if args.progress:
-        command.extend(["--bar", "--line-buffer"])
+        command.append("--bar")
     resume_simulation = config.get("defaults", {}).get("resume_simulation", False)
     if joblog.exists():
         if resume_simulation:
