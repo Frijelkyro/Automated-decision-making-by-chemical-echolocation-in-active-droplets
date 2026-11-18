@@ -1,0 +1,38 @@
+# DEPRECATED and ignored. Edit junction_zones.toml; maze_metadata.toml is generated output.
+# This file is retained only for reference.
+
+[J01]
+before = 4
+correct = 7
+wrong = 7
+center = [33, 16]
+before_radius = 6
+correct_radius = 6
+wrong_radius = 6
+
+[J02]
+before = 4
+correct = 7
+wrong = 7
+center = [26, 40]
+before_radius = 6
+correct_radius = 6
+wrong_radius = 6
+
+[J03]
+before = 4
+correct = 7
+wrong = 7
+center = [19, 64]
+before_radius = 6
+correct_radius = 6
+wrong_radius = 6
+
+[J04]
+before = 4
+correct = 7
+wrong = 7
+center = [12, 88]
+before_radius = 6
+correct_radius = 6
+wrong_radius = 6
