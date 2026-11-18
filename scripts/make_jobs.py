@@ -20,6 +20,7 @@ PARAMETER_FLAGS = {
     "num_particles": "--num-particles",
     "test_run": "--test-run",
     "resume_simulation": "--resume",
+    "seed": "--seed",
 }
 
 

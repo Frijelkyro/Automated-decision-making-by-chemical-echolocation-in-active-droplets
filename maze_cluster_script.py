@@ -4,6 +4,7 @@
 import matplotlib.pyplot as plt
 import argparse
 import os
+import random
 import sys
 import tomllib
 from pathlib import Path
@@ -48,7 +49,10 @@ parser.add_argument("--run-id", default="default")
 parser.add_argument("--shot", type=int, default=0)
 parser.add_argument("--data-dir", default="data")
 parser.add_argument("--output-dir")
+parser.add_argument("--seed", type=int, default=0)
 args = parser.parse_args()
+np.random.seed(args.seed)
+random.seed(args.seed)
 
 config_path = args.startpoints_config.expanduser()
 if not config_path.is_absolute():
@@ -342,6 +346,7 @@ parameter_dict = {
     "drops_added_incremental": drops_added_incremental,
     "run_id": args.run_id,
     "shot": args.shot,
+    "seed": args.seed,
 }
 
 # --------------- time tracking ---------------------
@@ -409,6 +414,11 @@ for i in pbar:
         # )
         # full_traj = np.append(full_traj, current_traj, axis=1)
         conc[-1, :, :] = conc[exit_timestep % n_steps, :, :]
+        loop_duration = perf_counter() - loop_t0
+        print(
+            f"Loop {i}: {loop_duration:.3f} s",
+            flush=True,
+        )
         break
     # current_time = np.repeat(
     #    time[:, i * n_steps : (i + 1) * n_steps, np.newaxis], num_particles, axis=0
@@ -442,6 +452,11 @@ for i in pbar:
         timestep= resume_step +(i + 1) * n_steps,
         active=n_active,
         simulation_time=f"{simulation_time:.0f}s",
+    )
+    loop_duration = perf_counter() - loop_t0
+    print(
+        f"Loop {i}: {loop_duration:.3f} s",
+        flush=True,
     )
 
 column_names = [

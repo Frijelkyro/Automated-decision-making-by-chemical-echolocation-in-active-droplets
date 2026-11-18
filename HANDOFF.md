@@ -1,0 +1,18 @@
+## T0 Seed and regression baseline
+- Files changed:
+  - `maze_cluster_script.py`: added `--seed`, NumPy/Python seeding, and per-loop `perf_counter()` runtime output.
+  - `scripts/make_jobs.py`: added seed forwarding support for experiment TOMLs.
+  - `tests/test_seed_regression.py`: added fixed-seed byte-identity regression coverage.
+  - `tests/baseline/`: stored the fixed-seed `exit_times.txt` and `part_*.npz` baseline.
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - Added `--seed <int>` to `maze_cluster_script.py`; default is `0`.
+  - Added `seed` support to generated experiment jobs.
+- Behavior changes vs. before (esp. physics/RNG):
+  - NumPy and Python RNGs are initialized before maze/config and particle initialization.
+  - Simulation behavior is reproducible for the same seed and configuration.
+  - Added console output in the form `Loop <index>: <runtime> s`; no physics equations changed.
+- How to test (exact command):
+  - `.venv/bin/python -m unittest tests.test_seed_regression`
+  - Baseline command: `.venv/bin/python maze_cluster_script.py --seed 12345 --test-run true --desired-time 20 --dt 0.0005 --n-steps 100 --num-particles 10 --emission-rate 0.5 --data-dir <data-dir> --output-dir <output-dir>`
+- Known issues / TODO for later tasks:
+  - Runtime output is wall-clock-dependent and is not written to files.

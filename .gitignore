@@ -3,10 +3,12 @@ data/*
 data
 output/*
 output*
+tests/baseline/*
 particle_trajectory.mp4
 .python-version
 evaluation-scripts/*.ipynb
 *.gz
+lines_of_code
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
