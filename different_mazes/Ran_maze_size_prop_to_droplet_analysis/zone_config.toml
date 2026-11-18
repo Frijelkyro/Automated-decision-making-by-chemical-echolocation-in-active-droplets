@@ -1,5 +1,5 @@
-# User-editable decision-zone distances for each junction.
-# Adjust values and rerun the script to regenerate masks and plots.
+# DEPRECATED and ignored. Edit junction_zones.toml; maze_metadata.toml is generated output.
+# This file is retained only for reference.
 
 [J01]
 before = 2

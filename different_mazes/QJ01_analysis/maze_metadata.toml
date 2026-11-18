@@ -1,16 +1,18 @@
+# Generated summary; edit junction_zones.toml for zone distances, radii, centers, and drops.
 maze_file = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/QJ01.tsv"
+maze_hash = "8563fd39ef2f429ce0170b642e011a20df3d2d9a01f84db57edd3cbed4714b4f"
 wall_value = 1
 dx = 1.0
 goal_tolerance = 2.0
-emitter_position = [5.0, 11.05]
-static_source_position = [100.2, 10.2]
 grid_shape = [46, 121]
-path_length = 166
+simulation_shape = [121, 46]
+path_length = 157
 emitter_grid = [33, 5]
-goal_grid = [34, 100]
+goal_grid = [33, 109]
 plot_path = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/QJ01_analysis/maze_decision_zones.png"
-zone_extent = "compact"
-
+zone_extent = "maximal"
+emitter_position = [5.3, 12.3]
+static_source_position = [110.2, 10.2]
 
 [[junctions]]
 id = "J01"
@@ -35,3 +37,11 @@ path_index = 68
 branch_count = 3
 kind = "Y"
 neighbors = [[17, 64], [19, 62], [21, 64]]
+
+[[junctions]]
+id = "J04"
+center = [12, 88]
+path_index = 97
+branch_count = 3
+kind = "Y"
+neighbors = [[10, 88], [12, 86], [14, 88]]

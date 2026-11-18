@@ -1,0 +1,33 @@
+# Active zone configuration; edit [defaults] for all junctions.
+# Any matching key in [junctions.Jxx] overrides the default for that junction.
+# Set before_radius, correct_radius, and wrong_radius independently; --zone-radius overrides all defaults for this run.
+# Per-junction keys: before_distance, correct_distance, wrong_distance, each *_radius, center, *_center, drop.
+# Example overrides in [junctions.J01]: correct_distance = 5, wrong_radius = 2.5, drop = true.
+# maze_metadata.toml is generated summary output and is not read as zone configuration.
+# Junctions with any explicit overrides: none
+# Individual radius overrides: none
+[defaults]
+before_distance = 4
+correct_distance = 7
+wrong_distance = 7
+before_radius = 4.0
+correct_radius = 6.0
+wrong_radius = 6.0
+maze_hash = "8563fd39ef2f429ce0170b642e011a20df3d2d9a01f84db57edd3cbed4714b4f"
+junction_ids = ["J01", "J02", "J03", "J04"]
+
+[junctions.J01]
+center = [33, 16]
+drop = false
+
+[junctions.J02]
+center = [26, 40]
+drop = false
+
+[junctions.J03]
+center = [19, 64]
+drop = false
+
+[junctions.J04]
+center = [12, 88]
+drop = false

@@ -1,3 +1,4 @@
+# Generated summary; edit junction_zones.toml for zone radii and centers.
 maze_file = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/Ran_maze_size_prop_to_droplet.tsv"
 maze_hash = "49ecd597e538d3f88654350d433d6b4faad6d4847f3264e597ef724205685c3d"
 wall_value = 1

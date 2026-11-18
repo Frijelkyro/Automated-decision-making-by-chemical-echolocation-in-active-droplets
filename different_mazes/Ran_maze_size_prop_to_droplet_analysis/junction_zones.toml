@@ -1,108 +1,136 @@
+# Active zone configuration. Edit [defaults] to change all junctions.
+# Any matching key in [junctions.Jxx] overrides only that junction.
+# Distances are independent skeleton steps; radii are independent grid-cell radii.
+# Set drop = true in a junction section to exclude it without renumbering later junctions.
+# --zone-radius R overrides all three default radii for one run; per-zone junction radii still win.
+# Per-junction keys: before_distance, correct_distance, wrong_distance, each *_radius, center, *_center, drop.
+# Example overrides in [junctions.J01]: correct_distance = 5, wrong_radius = 2.5, drop = true.
+# maze_metadata.toml is generated summary output and is not read as zone configuration.
 [defaults]
-before_length = 4
-zone_length = 7
-radius = 3.5
+before_distance = 4
+correct_distance = 7
+wrong_distance = 7
+before_radius = 3.5
+correct_radius = 3.5
+wrong_radius = 3.5
 maze_hash = "49ecd597e538d3f88654350d433d6b4faad6d4847f3264e597ef724205685c3d"
 junction_ids = ["J01", "J02", "J03", "J04", "J05", "J06", "J07", "J08", "J09", "J10", "J11", "J12", "J13", "J14", "J15", "J16", "J17"]
 
 [junctions.J01]
 center = [27, 9]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J02]
 center = [21, 31]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J03]
 center = [15, 52]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J04]
 center = [9, 73]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J05]
 center = [21, 95]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J06]
 center = [33, 67]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J07]
 center = [39, 46]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J08]
 center = [45, 24]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J09]
 center = [51, 3]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J10]
 center = [63, 31]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J11]
 center = [57, 52]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J12]
 center = [51, 73]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J13]
 center = [65, 91]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J14]
 center = [75, 67]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J15]
 center = [82, 46]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J16]
 center = [88, 24]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false
 
 [junctions.J17]
 center = [94, 52]
-before_length = 2
-zone_length = 6
-radius = 3.5
+before_distance = 2
+correct_distance = 6
+wrong_distance = 6
+drop = false

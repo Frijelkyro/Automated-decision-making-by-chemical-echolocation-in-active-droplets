@@ -30,8 +30,9 @@ MAZE_FILE = Path("different_mazes/Ran_maze_size_prop_to_droplet.tsv")
 GOAL_TOLERANCE = 2.0
 DX = 1.0
 COMPACT_ZONE_SIZE = 5
-DEFAULT_BEFORE_LENGTH = 4
-DEFAULT_ZONE_LENGTH = 7
+DEFAULT_BEFORE_DISTANCE = 4
+DEFAULT_CORRECT_DISTANCE = 7
+DEFAULT_WRONG_DISTANCE = 7
 DEFAULT_ZONE_RADIUS = 3.5
 
 # Preferred wall convention for TSVs. The project traditionally inverts raw TSVs,
@@ -129,7 +130,10 @@ def save_metadata(metadata_path: Path, maze_path: Path, maze_data: dict, path_ce
     if goal_position is not None:
         data["static_source_position"] = [float(goal_position[0]), float(goal_position[1])]
 
-    lines = [key + " = " + toml_string(value) for key, value in data.items()]
+    lines = [
+        "# Generated summary; edit junction_zones.toml for zone distances, radii, centers, and drops.",
+        *[key + " = " + toml_string(value) for key, value in data.items()],
+    ]
     for junction in junctions:
         center = junction["center"]
         lines.extend([
@@ -151,24 +155,41 @@ def junction_zone_config_path(analysis_dir: Path) -> Path:
     return analysis_dir / "junction_zones.toml"
 
 
-def editable_zone_config_path(analysis_dir: Path) -> Path:
-    return analysis_dir / "zone_config.toml"
-
-
-def load_zone_overrides(config_path: Path, current_ids: list[str]) -> tuple[int, int, float, dict]:
+def load_zone_overrides(config_path: Path, current_ids: list[str]) -> tuple[dict[str, float | int], dict]:
     if not config_path.is_file():
-        return DEFAULT_BEFORE_LENGTH, DEFAULT_ZONE_LENGTH, DEFAULT_ZONE_RADIUS, {}
+        return {
+            "before_distance": DEFAULT_BEFORE_DISTANCE,
+            "correct_distance": DEFAULT_CORRECT_DISTANCE,
+            "wrong_distance": DEFAULT_WRONG_DISTANCE,
+            "before_radius": DEFAULT_ZONE_RADIUS,
+            "correct_radius": DEFAULT_ZONE_RADIUS,
+            "wrong_radius": DEFAULT_ZONE_RADIUS,
+        }, {}
     try:
         with config_path.open("rb") as config_file:
             config = tomllib.load(config_file)
     except (OSError, tomllib.TOMLDecodeError) as error:
         print(f"Warning: could not read {config_path}: {error}")
-        return DEFAULT_BEFORE_LENGTH, DEFAULT_ZONE_LENGTH, DEFAULT_ZONE_RADIUS, {}
+        return {
+            "before_distance": DEFAULT_BEFORE_DISTANCE,
+            "correct_distance": DEFAULT_CORRECT_DISTANCE,
+            "wrong_distance": DEFAULT_WRONG_DISTANCE,
+            "before_radius": DEFAULT_ZONE_RADIUS,
+            "correct_radius": DEFAULT_ZONE_RADIUS,
+            "wrong_radius": DEFAULT_ZONE_RADIUS,
+        }, {}
 
     defaults = config.get("defaults", {})
-    before_length = int(defaults.get("before_length", DEFAULT_BEFORE_LENGTH))
-    zone_length = int(defaults.get("zone_length", DEFAULT_ZONE_LENGTH))
-    radius = float(defaults.get("radius", DEFAULT_ZONE_RADIUS))
+    legacy_distance = int(defaults.get("zone_length", DEFAULT_CORRECT_DISTANCE))
+    common_radius = float(defaults.get("radius", DEFAULT_ZONE_RADIUS))
+    default_values: dict[str, float | int] = {
+        "before_distance": int(defaults.get("before_distance", defaults.get("before_length", DEFAULT_BEFORE_DISTANCE))),
+        "correct_distance": int(defaults.get("correct_distance", legacy_distance)),
+        "wrong_distance": int(defaults.get("wrong_distance", defaults.get("wrong_length", legacy_distance))),
+        "before_radius": float(defaults.get("before_radius", common_radius)),
+        "correct_radius": float(defaults.get("correct_radius", common_radius)),
+        "wrong_radius": float(defaults.get("wrong_radius", common_radius)),
+    }
     stored_ids = set(defaults.get("junction_ids", []))
     if stored_ids and stored_ids != set(current_ids):
         print(
@@ -176,29 +197,60 @@ def load_zone_overrides(config_path: Path, current_ids: list[str]) -> tuple[int,
             f"(stored={sorted(stored_ids)}, current={sorted(current_ids)})"
         )
     overrides = config.get("junctions", {})
-    for jid, override in overrides.items():
-        if isinstance(override, dict) and "radius" in override:
-            override["before_radius"] = float(override["radius"])
-            override["correct_radius"] = float(override["radius"])
-            override["wrong_radius"] = float(override["radius"])
-    return before_length, zone_length, radius, overrides
+    return default_values, overrides
 
 
 def save_junction_zone_config(
     config_path: Path,
     maze_path: Path,
     junctions: list[dict],
-    before_length: int,
-    zone_length: int,
+    defaults: dict[str, float | int],
     existing_overrides: dict | None = None,
-    radius: float = DEFAULT_ZONE_RADIUS,
 ) -> None:
     existing_overrides = existing_overrides or {}
+    def is_effective_override(override: dict) -> bool:
+        for zone_name in ("before", "correct", "wrong"):
+            distance_key = f"{zone_name}_distance"
+            legacy_key = {"before": "before_length", "correct": "zone_length", "wrong": "wrong_length"}[zone_name]
+            distance = override.get(distance_key, override.get(legacy_key))
+            if distance is not None and int(distance) != int(defaults[distance_key]):
+                return True
+            radius_key = f"{zone_name}_radius"
+            radius = override.get(radius_key, override.get("radius"))
+            if radius is not None and float(radius) != float(defaults.get(radius_key, defaults.get("radius", DEFAULT_ZONE_RADIUS))):
+                return True
+        return bool(override.get("drop", False))
+
+    radius_override_ids = [
+        jid
+        for jid, override in existing_overrides.items()
+        if any(
+            (key in override and float(override[key]) != float(defaults.get(key, defaults.get("radius", DEFAULT_ZONE_RADIUS))))
+            for key in ("radius", "before_radius", "correct_radius", "wrong_radius")
+        )
+    ]
+    individual_override_ids = [
+        jid
+        for jid, override in existing_overrides.items()
+        if is_effective_override(override)
+    ]
     lines = [
+        "# Active zone configuration; edit [defaults] for all junctions.",
+        "# Any matching key in [junctions.Jxx] overrides the default for that junction.",
+        "# Set before_radius, correct_radius, and wrong_radius independently; --zone-radius overrides all defaults for this run.",
+        "# Per-junction keys: before_distance, correct_distance, wrong_distance, each *_radius, center, *_center, drop.",
+        "# Example overrides in [junctions.J01]: correct_distance = 5, wrong_radius = 2.5, drop = true.",
+        "# maze_metadata.toml is generated summary output and is not read as zone configuration.",
+        "# Junctions with any explicit overrides: "
+        + (", ".join(sorted(individual_override_ids)) if individual_override_ids else "none"),
+        "# Individual radius overrides: " + (", ".join(sorted(radius_override_ids)) if radius_override_ids else "none"),
         "[defaults]",
-        f"before_length = {int(before_length)}",
-        f"zone_length = {int(zone_length)}",
-        f"radius = {float(radius):.1f}",
+        f"before_distance = {int(defaults['before_distance'])}",
+        f"correct_distance = {int(defaults['correct_distance'])}",
+        f"wrong_distance = {int(defaults['wrong_distance'])}",
+        f"before_radius = {float(defaults.get('before_radius', defaults.get('radius', DEFAULT_ZONE_RADIUS))):.1f}",
+        f"correct_radius = {float(defaults.get('correct_radius', defaults.get('radius', DEFAULT_ZONE_RADIUS))):.1f}",
+        f"wrong_radius = {float(defaults.get('wrong_radius', defaults.get('radius', DEFAULT_ZONE_RADIUS))):.1f}",
         f'maze_hash = "{maze_hash(maze_path)}"',
         "junction_ids = [" + ", ".join(
             '"' + junction["id"] + '"' for junction in junctions
@@ -209,108 +261,24 @@ def save_junction_zone_config(
         center = junction["center"]
         lines.extend(["", f"[junctions.{jid}]", f"center = [{int(center[0])}, {int(center[1])}]"])
         override = existing_overrides.get(jid, {})
-        if "before_length" in override:
-            lines.append(f'before_length = {int(override["before_length"])}')
-        if "zone_length" in override:
-            lines.append(f'zone_length = {int(override["zone_length"])}')
-        override_radius = override.get("radius", override.get("before_radius"))
-        if override_radius is not None:
-            lines.append(f'radius = {float(override_radius):.1f}')
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def load_editable_zone_config(
-    config_path: Path,
-    current_ids: list[str],
-    free_mask: np.ndarray,
-) -> tuple[int, int, dict]:
-    """Load per-junction distances and optional raw-grid zone centers."""
-    if not config_path.is_file():
-        return DEFAULT_BEFORE_LENGTH, DEFAULT_ZONE_LENGTH, {}
-    try:
-        with config_path.open("rb") as config_file:
-            config = tomllib.load(config_file)
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        print(f"Warning: could not read {config_path}: {error}")
-        return DEFAULT_BEFORE_LENGTH, DEFAULT_ZONE_LENGTH, {}
-
-    stored_ids = {jid for jid in config if jid in current_ids or jid.startswith("J")}
-    extras = sorted(stored_ids - set(current_ids))
-    if extras:
-        print(
-            f"Warning: editable zone IDs no longer match junction IDs "
-            f"(obsolete={extras})"
-        )
-    overrides = {}
-    for jid in current_ids:
-        section = config.get(jid)
-        if not isinstance(section, dict):
-            continue
-        override = {}
-        if "center" in section:
-            center = section["center"]
-            if isinstance(center, (list, tuple)) and len(center) == 2:
-                override["center"] = (int(center[0]), int(center[1]))
-        for key in ("before", "before_length"):
-            if key in section:
-                override["before_length"] = int(section[key])
-                break
-        for key in ("correct", "zone_length"):
-            if key in section:
-                override["zone_length"] = int(section[key])
-                break
-        if "wrong" in section:
-            override["wrong_length"] = int(section["wrong"])
-        if "radius" in section:
-            override["radius"] = float(section["radius"])
-            override["before_radius"] = float(section["radius"])
-            override["correct_radius"] = float(section["radius"])
-            override["wrong_radius"] = float(section["radius"])
-
+        for zone_name in ("before", "correct", "wrong"):
+            distance_key = f"{zone_name}_distance"
+            legacy_key = {"before": "before_length", "correct": "zone_length", "wrong": "wrong_length"}[zone_name]
+            if distance_key in override and int(override[distance_key]) != int(defaults[distance_key]):
+                lines.append(f'{distance_key} = {int(override[distance_key])}')
+            elif legacy_key in override and int(override[legacy_key]) != int(defaults[distance_key]):
+                lines.append(f'{distance_key} = {int(override[legacy_key])}')
         for zone_name in ("before", "correct", "wrong"):
             center_key = f"{zone_name}_center"
-            if center_key in section:
-                center = section[center_key]
-                if isinstance(center, (list, tuple)) and len(center) == 2:
-                    override[f"{zone_name}_center"] = (int(center[0]), int(center[1]))
-            radius_key = f"{zone_name}_radius"
-            if radius_key in section:
-                override[f"{zone_name}_radius"] = float(section[radius_key])
-        overrides[jid] = override
-    defaults = config.get("defaults", {})
-    before_length = int(defaults.get("before_length", DEFAULT_BEFORE_LENGTH))
-    zone_length = int(defaults.get("zone_length", DEFAULT_ZONE_LENGTH))
-    return before_length, zone_length, overrides
-
-
-def save_editable_zone_config(
-    config_path: Path,
-    junctions: list[dict],
-    before_length: int,
-    zone_length: int,
-) -> None:
-    if config_path.is_file():
-        return
-    lines = [
-        "# User-editable per-junction decision-zone distances and optional raw-grid centers.",
-        "# Valid keys: before, correct, wrong, before_center, correct_center, wrong_center.",
-        "# Radius keys are optional: before_radius, correct_radius, wrong_radius.",
-        "",
-    ]
-    for junction in junctions:
-        jid = junction["id"]
-        center = junction["center"]
-        lines.extend([
-            f"[{jid}]",
-            f"before = {int(before_length)}",
-            f"correct = {int(zone_length)}",
-            f"wrong = {int(zone_length)}",
-            f"center = [{int(center[0])}, {int(center[1])}]",
-            "before_radius = 3.5",
-            "correct_radius = 3.5",
-            "wrong_radius = 3.5",
-            "",
-        ])
+            if center_key in override:
+                center = override[center_key]
+                lines.append(f"{center_key} = [{int(center[0])}, {int(center[1])}]")
+        lines.append(f'drop = {str(bool(override.get("drop", False))).lower()}')
+        for zone_name in ("before", "correct", "wrong"):
+            key = f"{zone_name}_radius"
+            radius = override.get(key, override.get("radius"))
+            if radius is not None and float(radius) != float(defaults[key]):
+                lines.append(f'{key} = {float(radius):.1f}')
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -515,6 +483,21 @@ def order_junctions_by_path(junctions: list[dict], path: list[tuple[int, int]]) 
     return ordered
 
 
+def active_junctions_after_configured_drops(
+    junctions: list[dict],
+    overrides: dict[str, dict],
+) -> list[dict]:
+    """Filter explicitly dropped junctions without changing their assigned IDs."""
+    active = []
+    for junction in junctions:
+        if overrides.get(junction["id"], {}).get("drop", False):
+            junction["dropped"] = True
+            print(f"Warning: dropping {junction['id']} by junction_zones.toml; its ID is retained")
+        else:
+            active.append(junction)
+    return active
+
+
 def build_zones(
     junctions: list[dict],
     graph,
@@ -522,23 +505,31 @@ def build_zones(
     free_mask: np.ndarray,
     path: list[tuple[int, int]],
     zone_extent: str = "maximal",
-    before_length: int = DEFAULT_BEFORE_LENGTH,
-    zone_length: int = DEFAULT_ZONE_LENGTH,
+    before_distance: int = DEFAULT_BEFORE_DISTANCE,
+    correct_distance: int = DEFAULT_CORRECT_DISTANCE,
+    wrong_distance: int = DEFAULT_WRONG_DISTANCE,
     junction_overrides: dict | None = None,
+    default_radii: dict[str, float] | None = None,
 ) -> dict:
     """Build before/correct/wrong skeleton gates with a single expansion pass."""
     if zone_extent not in {"maximal", "compact"}:
         raise ValueError("zone_extent must be 'maximal' or 'compact'.")
-    if before_length < 1:
-        raise ValueError("before_length must be at least 1")
-    if zone_length < 1:
-        raise ValueError("zone_length must be at least 1")
+    distances = {
+        "before": before_distance,
+        "correct": correct_distance,
+        "wrong": wrong_distance,
+    }
+    if any(distance < 1 for distance in distances.values()):
+        raise ValueError("before_distance, correct_distance, and wrong_distance must be at least 1")
     if not path:
         return {}
 
     path_set = set(path)
     result = {}
     junction_overrides = junction_overrides or {}
+    default_radii = default_radii or {
+        name: DEFAULT_ZONE_RADIUS for name in ("before", "correct", "wrong")
+    }
 
     def bfs_branch(first_neighbors: set[tuple[int, int]], limit: int) -> set[tuple[int, int]]:
         distances: dict[tuple[int, int], int] = {}
@@ -564,11 +555,13 @@ def build_zones(
         jid = junction["id"]
         cluster = set(junction.get("cluster", [])) or {junction["center"]}
         override = junction_overrides.get(jid, {})
-        junction_before = int(override.get("before_length", before_length))
-        junction_zone = int(override.get("zone_length", zone_length))
-        junction_wrong = int(override.get("wrong_length", junction_zone))
-        if junction_before < 1 or junction_zone < 1 or junction_wrong < 1:
-            raise ValueError(f"{jid}: before_length and zone_length must be at least 1")
+        junction_distances = {
+            "before": int(override.get("before_distance", override.get("before_length", before_distance))),
+            "correct": int(override.get("correct_distance", override.get("zone_length", correct_distance))),
+            "wrong": int(override.get("wrong_distance", override.get("wrong_length", wrong_distance))),
+        }
+        if any(distance < 1 for distance in junction_distances.values()):
+            raise ValueError(f"{jid}: zone distances must be at least 1")
 
         path_indices = {
             cell: index
@@ -585,7 +578,7 @@ def build_zones(
                 ),
             ),
         )
-        before_segment = set(path[max(0, path_index - junction_before + 1):path_index + 1])
+        before_segment = set(path[max(0, path_index - junction_distances["before"] + 1):path_index + 1])
 
         outward_neighbors = set()
         third_neighbors = set()
@@ -637,8 +630,8 @@ def build_zones(
             )
             return ranked[0]
 
-        correct_fallback = bfs_branch(outward_neighbors, junction_zone) & skeleton_set
-        wrong_fallback = bfs_branch(third_neighbors, junction_wrong) & skeleton_set
+        correct_fallback = bfs_branch(outward_neighbors, junction_distances["correct"]) & skeleton_set
+        wrong_fallback = bfs_branch(third_neighbors, junction_distances["wrong"]) & skeleton_set
 
         before_center = override.get("before_center")
         if before_center is None:
@@ -648,12 +641,14 @@ def build_zones(
             ) if before_segment else tuple(junction["center"])
         correct_center = override.get("correct_center")
         if correct_center is None:
-            correct_center = point_along(outward_neighbors, junction_zone, correct_fallback)
+            correct_center = point_along(outward_neighbors, junction_distances["correct"], correct_fallback)
         wrong_center = override.get("wrong_center")
         if wrong_center is None:
-            wrong_center = point_along(third_neighbors, junction_wrong, wrong_fallback)
+            wrong_center = point_along(third_neighbors, junction_distances["wrong"], wrong_fallback)
 
         def gate_mask(center: tuple[int, int], radius: float) -> set[tuple[int, int]]:
+            if radius <= 0:
+                raise ValueError(f"{jid}: gate radii must be positive")
             rr0, cc0 = center
             return {
                 (rr, cc)
@@ -663,15 +658,15 @@ def build_zones(
 
         before = gate_mask(
             before_center,
-            float(override.get("before_radius", override.get("radius", DEFAULT_ZONE_RADIUS))),
+            float(override.get("before_radius", override.get("radius", default_radii["before"]))),
         )
         correct = gate_mask(
             correct_center,
-            float(override.get("correct_radius", override.get("radius", DEFAULT_ZONE_RADIUS))),
+            float(override.get("correct_radius", override.get("radius", default_radii["correct"]))),
         )
         wrong = gate_mask(
             wrong_center,
-            float(override.get("wrong_radius", override.get("radius", DEFAULT_ZONE_RADIUS))),
+            float(override.get("wrong_radius", override.get("radius", default_radii["wrong"]))),
         )
         wrong -= correct
         if zone_extent == "compact":
@@ -683,22 +678,22 @@ def build_zones(
                 and abs(cell[1] - center_col) <= radius
             }
             onward_in_compact = sorted(
-                compact_skeleton & bfs_branch(outward_neighbors, junction_zone),
+                compact_skeleton & bfs_branch(outward_neighbors, junction_distances["correct"]),
                 key=lambda cell: abs(cell[0] - center_row) + abs(cell[1] - center_col),
             )
             if onward_in_compact:
                 correct = gate_mask(
                     onward_in_compact[0],
-                    float(override.get("correct_radius", override.get("radius", DEFAULT_ZONE_RADIUS))),
+                    float(override.get("correct_radius", override.get("radius", default_radii["correct"]))),
                 )
             third_in_compact = sorted(
-                compact_skeleton & bfs_branch(third_neighbors, junction_wrong),
+                compact_skeleton & bfs_branch(third_neighbors, junction_distances["wrong"]),
                 key=lambda cell: abs(cell[0] - center_row) + abs(cell[1] - center_col),
             )
             if third_in_compact:
                 wrong = gate_mask(
                     third_in_compact[0],
-                    float(override.get("wrong_radius", override.get("radius", DEFAULT_ZONE_RADIUS))),
+                    float(override.get("wrong_radius", override.get("radius", default_radii["wrong"]))),
                 )
             wrong -= correct
             before = {
@@ -718,8 +713,10 @@ def build_zones(
         zones_for_junction = {"before": before, "correct": correct, "wrong": wrong}
         result[jid] = zones_for_junction
         print(
-            f"{jid}: before={len(before_segment)} onward skeleton, "
-            f"correct/wrong depth={junction_zone}; "
+            f"{jid}: distances={junction_distances}; "
+            f"radii=({override.get('before_radius', override.get('radius', default_radii['before'])):g}, "
+            f"{override.get('correct_radius', override.get('radius', default_radii['correct'])):g}, "
+            f"{override.get('wrong_radius', override.get('radius', default_radii['wrong'])):g}); "
             f"cells={ {k: len(v) for k, v in zones_for_junction.items()} }"
         )
 
@@ -795,8 +792,13 @@ def plot_maze(grid: np.ndarray, free_mask: np.ndarray, skeleton: np.ndarray, pat
 
     for junction in junctions:
         r, c = junction["center"]
-        ax.plot(c, r, "o", color="gold", markersize=7)
-        ax.text(c + 1.0, r + 1.0, junction["id"], color="gold", fontsize=9, weight="bold")
+        if junction.get("dropped", False):
+            ax.plot(c, r, "x", color="gray", markersize=7)
+            label_color = "gray"
+        else:
+            ax.plot(c, r, "o", color="gold", markersize=7)
+            label_color = "gold"
+        ax.text(c + 1.0, r + 1.0, junction["id"], color=label_color, fontsize=9, weight="bold")
 
     graph = build_graph(skeleton)
     dead_ends = [
@@ -886,8 +888,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Goal/static-source position in simulation coordinates.",
     )
     parser.add_argument("--zone-extent", choices=("maximal", "compact"), default="maximal")
-    parser.add_argument("--before-length", type=int, default=None)
-    parser.add_argument("--zone-length", type=int, default=None)
+    parser.add_argument(
+        "--before-distance", "--before-length", dest="before_distance", type=int, default=None
+    )
+    parser.add_argument("--correct-distance", type=int, default=None)
+    parser.add_argument("--wrong-distance", type=int, default=None)
+    parser.add_argument("--zone-length", dest="legacy_zone_distance", type=int, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--zone-radius",
+        type=float,
+        default=None,
+        help="Override the default gate radius for this run; per-junction radii in junction_zones.toml still win.",
+    )
     return parser
 
 
@@ -985,69 +997,87 @@ def main(argv: list[str] | None = None):
     graph = build_graph(skeleton)
     junctions = order_junctions_by_path(find_junctions(skeleton, graph), path_cells)
 
-    exit_radius = float(maze_config.get("exit_radius", 0.0))
-    kept_junctions = []
-    for junction in junctions:
-        row, col = junction["center"]
-        distance_to_exit = float(np.hypot(row - goal_grid[0], col - goal_grid[1]))
-        if distance_to_exit <= exit_radius:
-            print(
-                f"Warning: skipping {junction['id']} inside exit radius "
-                f"(distance={distance_to_exit:.1f}, radius={exit_radius:.1f})"
-            )
-            continue
-        kept_junctions.append(junction)
-    junctions = kept_junctions
-
     junction_zone_path = junction_zone_config_path(analysis_dir)
-    editable_zone_path = editable_zone_config_path(analysis_dir)
-    save_editable_zone_config(
-        editable_zone_path,
-        junctions,
-        DEFAULT_BEFORE_LENGTH,
-        DEFAULT_ZONE_LENGTH,
-    )
-    configured_before, configured_zone, existing_overrides = load_editable_zone_config(
-        editable_zone_path,
-        [junction["id"] for junction in junctions],
-        free_mask,
-    )
-    _, _, junction_radius, junction_overrides = load_zone_overrides(
+    legacy_zone_config = analysis_dir / "zone_config.toml"
+    if legacy_zone_config.is_file():
+        print(
+            f"Note: ignoring legacy {legacy_zone_config}; edit "
+            f"{junction_zone_path} for active zone settings."
+        )
+    default_values, existing_overrides = load_zone_overrides(
         junction_zone_path,
         [junction["id"] for junction in junctions],
     )
-    for jid, override in junction_overrides.items():
-        if jid in existing_overrides:
-            existing_overrides[jid].update(override)
-        else:
-            existing_overrides[jid] = override
     for junction in junctions:
         override = existing_overrides.get(junction["id"], {})
         if "center" in override:
             junction["center"] = override["center"]
-    before_length = args.before_length if args.before_length is not None else configured_before
-    zone_length = args.zone_length if args.zone_length is not None else configured_zone
-    if before_length < 1 or zone_length < 1:
-        parser.error("before_length and zone_length must be at least 1")
+    configured_before = int(default_values["before_distance"])
+    configured_correct = int(default_values["correct_distance"])
+    configured_wrong = int(default_values["wrong_distance"])
+    before_distance = args.before_distance if args.before_distance is not None else configured_before
+    legacy_zone_distance = args.legacy_zone_distance
+    correct_distance = (
+        args.correct_distance
+        if args.correct_distance is not None
+        else legacy_zone_distance if legacy_zone_distance is not None else configured_correct
+    )
+    wrong_distance = (
+        args.wrong_distance
+        if args.wrong_distance is not None
+        else legacy_zone_distance if legacy_zone_distance is not None else configured_wrong
+    )
+    default_radii = {
+        name: float(default_values[f"{name}_radius"])
+        for name in ("before", "correct", "wrong")
+    }
+    if args.zone_radius is not None:
+        default_radii = {name: args.zone_radius for name in default_radii}
+    if min(before_distance, correct_distance, wrong_distance) < 1:
+        parser.error("before, correct, and wrong distances must be at least 1")
+    if min(default_radii.values()) <= 0:
+        parser.error("zone radii must be positive")
+    print(
+        f"Zone config: distances={before_distance}/{correct_distance}/{wrong_distance}; "
+        f"default radii={default_radii} from {junction_zone_path}; "
+        "per-junction values override defaults."
+    )
+
+    exit_radius = float(maze_config.get("exit_radius", 0.0))
+    active_junctions = active_junctions_after_configured_drops(junctions, existing_overrides)
+    remaining_junctions = []
+    for junction in active_junctions:
+        row, col = junction["center"]
+        distance_to_exit = float(np.hypot(row - goal_grid[0], col - goal_grid[1]))
+        if distance_to_exit <= exit_radius:
+            junction["dropped"] = True
+            print(
+                f"Warning: skipping {junction['id']} inside exit radius "
+                f"(distance={distance_to_exit:.1f}, radius={exit_radius:.1f}); its ID is retained"
+            )
+            continue
+        remaining_junctions.append(junction)
+    active_junctions = remaining_junctions
+
     save_junction_zone_config(
         junction_zone_path,
         path,
         junctions,
-        before_length,
-        zone_length,
+        default_values,
         existing_overrides,
-        junction_radius,
     )
     zones = build_zones(
-        junctions,
+        active_junctions,
         graph,
         skeleton,
         free_mask,
         path_cells,
         zone_extent=args.zone_extent,
-        before_length=before_length,
-        zone_length=zone_length,
+        before_distance=before_distance,
+        correct_distance=correct_distance,
+        wrong_distance=wrong_distance,
         junction_overrides=existing_overrides,
+        default_radii=default_radii,
     )
 
     for jid, masks in zones.items():
@@ -1064,7 +1094,7 @@ def main(argv: list[str] | None = None):
         zones,
         free_mask.shape,
         path,
-        [junction["id"] for junction in junctions],
+        [junction["id"] for junction in active_junctions],
     )
     save_metadata(
         analysis_dir / "maze_metadata.toml", path, maze_data, path_cells, junctions, zones,
@@ -1077,6 +1107,7 @@ def main(argv: list[str] | None = None):
     print(f"Goal on route: {goal_grid} -> sim {grid_to_sim(goal_grid, free_mask.shape, DX)}")
     print(f"Path length: {len(path_cells)} cells")
     print(f"Detected junctions: {', '.join(j['id'] for j in junctions) if junctions else 'none'}")
+    print(f"Active junctions: {', '.join(j['id'] for j in active_junctions) if active_junctions else 'none'}")
     print(f"Zone summary: {list(zones.keys())}")
     print(f"Saved analysis artifacts under {analysis_dir}")
 
@@ -1091,6 +1122,7 @@ def main(argv: list[str] | None = None):
         "path": path_cells,
         "path_sim": [grid_to_sim(cell, free_mask.shape, DX) for cell in path_cells],
         "junctions": junctions,
+        "active_junctions": active_junctions,
         "zones": zones,
         "analysis_dir": str(analysis_dir),
         "mask_path": str(analysis_dir / "zone_masks.npz"),

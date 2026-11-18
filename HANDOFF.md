@@ -162,8 +162,8 @@
   - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/zone_config.toml`
   - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_decision_zones.png`
 - New/changed interfaces:
-  - `zone_config.toml` supports per-junction `before`, `correct`, and `wrong` distances.
-  - Optional raw-grid keys are `center`, `before_center`, `correct_center`, `wrong_center`, plus `before_radius`, `correct_radius`, and `wrong_radius`.
+  - The earlier `zone_config.toml` settings are now legacy and ignored; `junction_zones.toml` is the active source.
+  - Active per-junction raw-grid keys are `center`, `before_center`, `correct_center`, `wrong_center`, and optional radius keys.
   - Masks are now local circular/free-corridor gates rather than nearest-skeleton-corridor expansions.
 - Behavior changes:
   - Plot overlays no longer cover the whole maze corridor.
@@ -178,3 +178,65 @@
 - Interface:
   - `[defaults]` accepts `radius = 3.5`.
   - `[junctions.Jxx]` accepts `radius`; it applies to before, correct, and wrong gates.
+### T6 configuration precedence clarification
+- Files changed:
+  - `scripts/maze_skeleton_path.py`
+  - `different_mazes/QJ01_analysis/junction_zones.toml`
+  - `different_mazes/QJ01_analysis/zone_config.toml`
+  - `different_mazes/QJ01_analysis/maze_metadata.toml`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/junction_zones.toml`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/zone_config.toml`
+- Interfaces:
+  - `junction_zones.toml` is the active zone configuration; matching `[junctions.Jxx]` entries override `[defaults]`.
+  - Added `--zone-radius R` for a run-only default-radius override; explicit junction radii still take precedence.
+  - `zone_config.toml` is legacy and ignored; `maze_metadata.toml` is generated output, not a zone input.
+
+## T6 independent zone settings and junction drops
+- Files changed:
+  - `scripts/maze_skeleton_path.py`
+  - `tests/test_particle_decision_analysis.py`
+  - `different_mazes/QJ01_analysis/junction_zones.toml`
+  - `different_mazes/Ran_maze_size_prop_to_droplet_analysis/junction_zones.toml`
+- Interfaces:
+  - `[defaults]` and `[junctions.Jxx]` use independent `before_distance`, `correct_distance`, `wrong_distance` and per-zone `before_radius`, `correct_radius`, `wrong_radius`.
+  - `drop = true` skips that junction's zones without renumbering later junction IDs; config entries retain `drop = false` by default.
+  - Added `--before-distance`, `--correct-distance`, and `--wrong-distance`; legacy `--zone-length` remains as a hidden compatibility alias setting both correct and wrong distances.
+
+## T7 JunctionTracker and solver integration
+- Files changed:
+  - `junction_tracking.py`
+  - `list_of_functions.py`
+  - `maze_cluster_script.py`
+  - `scripts/make_jobs.py`
+  - `maze_startpoints_configuration.toml`
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - Added `JunctionTracker(zones_file, num_particles, nx, ny, dx=1.0)` and `JunctionTracker.update(global_step, sim_time, px, py, active_mask)`.
+  - State attributes for T8: `before`, `correct`, `wrong` have shape `(J, nx, ny)`, `armed` has shape `(N, J)`, and `event_buffer`/`events` hold `(global_step, sim_time, particle_id, junction_id, correct)` tuples.
+  - Added `--track-decisions`, `--zones-file`, and `--decision-flush-loops`; maze profiles accept `zones_file`.
+  - Each flush writes `decisions_<n>.npz` in the shot output directory. NPZ keys are `global_step`, `sim_time`, `particle_id`, `junction_id`, `correct`, plus `junction_ids`, `shape`, and compatibility aliases `global_steps`, `particle_ids`, `decision`.
+  - `junction_tracker` state is checkpointed under `extra_state["junction_tracker"]`.
+- Behavior changes vs. before (esp. physics/RNG):
+  - Tracking is inert and introduces no RNG or physics changes unless `--track-decisions` is enabled.
+  - Armed particles persist until one of their junction correct/wrong gates fires; no timeout is added.
+  - The tracker runs after the solver's OOB check, in batched NumPy operations, and logs numeric junction indices and `correct=1`/`wrong=0`.
+  - Buffers flush every configured solver-loop count, at normal shot end, and from the OOB catch path.
+- How to test (exact command):
+  - `.venv/bin/python -m compileall -q junction_tracking.py maze_cluster_script.py list_of_functions.py scripts/make_jobs.py`
+  - `tmpdir=$(mktemp -d); .venv/bin/python maze_cluster_script.py --desired-time 1 --n-steps 100 --seed 12345 --maze-config Ran_maze_size_prop_to_droplet --track-decisions --decision-flush-loops 5 --data-dir "$tmpdir" --output-dir "$tmpdir" && find "$tmpdir" -name 'decisions_*.npz' -print`
+  - Run paired identical seeds with tracking omitted and compare `exit_times.txt` and snapshot outputs.
+- Known issues / TODO for later tasks:
+  - The existing fixed-seed suite currently differs from its stored `exit_times.txt` baseline on particle exit time; paired track-off runs should be used to isolate baseline equality until that baseline is reconciled.
+
+## T7 decision log viewer
+- Files changed:
+  - `scripts/view_decisions.py`
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - Added `python scripts/view_decisions.py <shot-directory> [--head N]`.
+- Behavior changes vs. before (esp. physics/RNG):
+  - Read-only; no simulation or physics changes.
+- How to test (exact command):
+  - `.venv/bin/python scripts/view_decisions.py <shot-output-directory> --head 20`
+- Known issues / TODO for later tasks:
+  - The viewer prints the first N rows from each `decisions_*.npz`; use `--head 0` to print only filenames.

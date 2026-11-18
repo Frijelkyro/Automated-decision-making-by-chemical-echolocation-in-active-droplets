@@ -48,6 +48,61 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_junction_zone_config_loads_independent_defaults_and_drop_override(self):
+        config_path = self.root / "junction_zones.toml"
+        config_path.write_text(
+            "[defaults]\n"
+            "before_distance = 2\ncorrect_distance = 5\nwrong_distance = 8\n"
+            "before_radius = 2.5\ncorrect_radius = 3.5\nwrong_radius = 4.5\n"
+            'junction_ids = ["J01", "J02"]\n'
+            "[junctions.J01]\n"
+            "before_distance = 1\nwrong_radius = 6.5\ndrop = true\n",
+            encoding="utf-8",
+        )
+
+        defaults, overrides = maze_analysis.load_zone_overrides(config_path, ["J01", "J02"])
+
+        self.assertEqual(defaults, {
+            "before_distance": 2,
+            "correct_distance": 5,
+            "wrong_distance": 8,
+            "before_radius": 2.5,
+            "correct_radius": 3.5,
+            "wrong_radius": 4.5,
+        })
+        self.assertEqual(overrides["J01"]["before_distance"], 1)
+        self.assertEqual(overrides["J01"]["wrong_radius"], 6.5)
+        self.assertTrue(overrides["J01"]["drop"])
+
+        maze_path = self.root / "maze.tsv"
+        maze_path.write_text("0\t1\n", encoding="utf-8")
+        maze_analysis.save_junction_zone_config(
+            config_path,
+            maze_path,
+            [{"id": "J01", "center": (1, 2)}, {"id": "J02", "center": (3, 4)}],
+            defaults,
+            overrides,
+        )
+        saved = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["defaults"]["wrong_distance"], 8)
+        self.assertEqual(saved["defaults"]["wrong_radius"], 4.5)
+        self.assertTrue(saved["junctions"]["J01"]["drop"])
+        self.assertEqual(saved["junctions"]["J01"]["wrong_radius"], 6.5)
+        self.assertFalse(saved["junctions"]["J02"]["drop"])
+        self.assertNotIn("zone_length", saved["defaults"])
+
+    def test_dropping_junction_keeps_later_junction_ids(self):
+        junctions = [{"id": f"J{index:02d}", "center": (index, index)} for index in range(1, 4)]
+
+        active = maze_analysis.active_junctions_after_configured_drops(
+            junctions,
+            {"J02": {"drop": True}},
+        )
+
+        self.assertEqual([junction["id"] for junction in active], ["J01", "J03"])
+        self.assertEqual([junction["id"] for junction in junctions], ["J01", "J02", "J03"])
+        self.assertTrue(junctions[1]["dropped"])
+
     def test_zone_masks_expand_across_corridor_and_to_dead_end(self):
         shape = (7, 15)
         free = np.zeros(shape, dtype=bool)
@@ -102,7 +157,15 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
             {"id": "J02", "center": (3, 11), "cluster": {(3, 11)}},
         ]
 
-        zones = maze_analysis.build_zones(junctions, graph, skeleton, free, path, zone_extent="compact")
+        zones = maze_analysis.build_zones(
+            junctions,
+            graph,
+            skeleton,
+            free,
+            path,
+            zone_extent="compact",
+            junction_overrides={"J01": {"correct_radius": 1.0, "wrong_radius": 1.0}},
+        )
 
         for cells in zones["J01"].values():
             self.assertTrue(all(1 <= row <= 5 and 5 <= col <= 9 for row, col in cells))
