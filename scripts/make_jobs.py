@@ -23,6 +23,9 @@ PARAMETER_FLAGS = {
     "test_run": "--test-run",
     "resume_simulation": "--resume",
     "seed": "--seed",
+    "track_decisions": "--track-decisions",
+    "zones_file": "--zones-file",
+    "decision_flush_loops": "--decision-flush-loops",
 }
 
 
@@ -64,7 +67,12 @@ def generate_jobs(config_path):
                 output_dir = output_root / series["name"] / run_id / shot_name
                 args = [sys.executable, str(WRAPPER)]
                 for key, value in parameters.items():
-                    args.extend([PARAMETER_FLAGS[key], _value_text(value)])
+                    flag = PARAMETER_FLAGS[key]
+                    if key == "track_decisions":
+                        if value:
+                            args.append(flag)
+                    else:
+                        args.extend([flag, _value_text(value)])
                 args.extend([
                     "--run-id", run_id,
                     "--shot", str(shot),

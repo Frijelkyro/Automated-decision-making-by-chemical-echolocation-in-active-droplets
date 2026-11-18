@@ -69,6 +69,9 @@ class SimParams:
     run_id: object
     shot: int
     seed: int
+    junction_tracker: object = None
+    decision_output_dir: str = ""
+    decision_flush_loops: int = 100
 
     def to_parameter_dict(self):
         return {
@@ -1113,6 +1116,15 @@ def chemical_solver(
                     f"particle id(s): {bad_particles.tolist()}"
                 )
             ## ----------------------------------------------------------------------------
+
+        if params.junction_tracker is not None:
+            params.junction_tracker.update(
+                timestep,
+                simulation_time,
+                px_bins,
+                py_bins,
+                active_mask,
+            )
 
         # Write concentration and particle data
         if local_step == 0 and start_step == 0:

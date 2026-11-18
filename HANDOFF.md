@@ -178,6 +178,7 @@
 - Interface:
   - `[defaults]` accepts `radius = 3.5`.
   - `[junctions.Jxx]` accepts `radius`; it applies to before, correct, and wrong gates.
+<<<<<<< HEAD
 ### T6 configuration precedence clarification
 - Files changed:
   - `scripts/maze_skeleton_path.py`
@@ -201,6 +202,8 @@
   - `[defaults]` and `[junctions.Jxx]` use independent `before_distance`, `correct_distance`, `wrong_distance` and per-zone `before_radius`, `correct_radius`, `wrong_radius`.
   - `drop = true` skips that junction's zones without renumbering later junction IDs; config entries retain `drop = false` by default.
   - Added `--before-distance`, `--correct-distance`, and `--wrong-distance`; legacy `--zone-length` remains as a hidden compatibility alias setting both correct and wrong distances.
+=======
+>>>>>>> 76bf27b (first proper implementation of junction decision tracking in the simulation loop (+bugs?))
 
 ## T7 JunctionTracker and solver integration
 - Files changed:

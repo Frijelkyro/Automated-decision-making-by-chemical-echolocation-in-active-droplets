@@ -12,6 +12,7 @@ from list_of_functions import (
     SimParams,
     write_param_snapshot,
 )
+from junction_tracking import JunctionTracker
 
 from time import perf_counter
 from tqdm import tqdm
@@ -52,6 +53,9 @@ parser.add_argument("--shot", type=int, default=0)
 parser.add_argument("--data-dir", default="data")
 parser.add_argument("--output-dir")
 parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--track-decisions", action="store_true", default=False)
+parser.add_argument("--zones-file", type=Path)
+parser.add_argument("--decision-flush-loops", type=int, default=100)
 args = parser.parse_args()
 np.random.seed(args.seed)
 random.seed(args.seed)
@@ -75,6 +79,7 @@ try:
     emitter_jitter = np.asarray(maze_config.get("emitter_jitter", [0.0, 0.0]), dtype=np.float32)
     static_source_position = tuple(map(float, maze_config["static_source_position"]))
     configured_exit_radius = float(maze_config["exit_radius"])
+    configured_zones_file = maze_config.get("zones_file")
     if emitter_position.shape != (2,) or emitter_jitter.shape != (2,):
         raise ValueError("emitter_position and emitter_jitter must each contain [x, y].")
 except (KeyError, OSError, tomllib.TOMLDecodeError, TypeError, ValueError) as error:
@@ -136,6 +141,8 @@ if conc_every <= 0:
     parser.error("--conc-every must be positive")
 if conc_every % part_every != 0:
     parser.error("--conc-every must be a multiple of --part-every")
+if args.decision_flush_loops < 1:
+    parser.error("--decision-flush-loops must be positive")
 
 num_particles = args.num_particles  # Number of particles
 emission_rate = args.emission_rate  # droplets per second
@@ -253,6 +260,30 @@ if resume_simulation:
     else:
         print(f"No checkpoint found in {data}; starting this shot from scratch.")
 
+junction_tracker = None
+if args.track_decisions:
+    zones_file = args.zones_file or configured_zones_file
+    if zones_file is None:
+        parser.error("--track-decisions requires --zones-file or a zones_file in the maze profile")
+    zones_file = Path(zones_file).expanduser()
+    if not zones_file.is_absolute():
+        zones_file = Path(__file__).resolve().parent / zones_file
+    junction_tracker = JunctionTracker(
+        zones_file,
+        num_particles,
+        maze.shape[0],
+        maze.shape[1],
+        dx=dx,
+    )
+    if os.path.exists(os.path.join(data, "ckpt_previous.npz")):
+        try:
+            with np.load(os.path.join(data, "ckpt_previous.npz"), allow_pickle=True) as state:
+                if "extra_state" in state:
+                    extra_state = state["extra_state"].item()
+                    if isinstance(extra_state, dict):
+                        junction_tracker.restore_state(extra_state.get("junction_tracker"))
+        except (OSError, ValueError):
+            parser.error("Unable to restore junction tracker state from ckpt_previous.npz")
 
 # Build one parameter source and serialize its legacy parameter-file keys from it.
 sim_params = SimParams(
@@ -310,6 +341,9 @@ sim_params = SimParams(
     run_id=args.run_id,
     shot=args.shot,
     seed=args.seed,
+    junction_tracker=junction_tracker,
+    decision_output_dir=output_dir,
+    decision_flush_loops=args.decision_flush_loops,
 )
 parameter_dict = sim_params.to_parameter_dict()
 
@@ -328,17 +362,22 @@ global_step = resume_step + 1 if resumed_from_checkpoint else 0
 for i in pbar:
     loop_t0 = perf_counter()  # time tracking
 
-    solver_result = chemical_solver(
-        conc,
-        p,
-        theta,
-        v,
-        omega,
-        maze,
-        sim_params,
-        start_step=global_step,
-        start_time=simulation_time,
-    )
+    try:
+        solver_result = chemical_solver(
+            conc,
+            p,
+            theta,
+            v,
+            omega,
+            maze,
+            sim_params,
+            start_step=global_step,
+            start_time=simulation_time,
+        )
+    except RuntimeError:
+        if junction_tracker is not None:
+            junction_tracker.flush(output_dir)
+        raise
     conc = solver_result.concentration
     p = solver_result.position
     theta = solver_result.theta
@@ -358,6 +397,8 @@ for i in pbar:
         "numpy_rng": np.random.get_state(),
         "python_rng": random.getstate(),
     }
+    if junction_tracker is not None:
+        extra_state["junction_tracker"] = junction_tracker.get_state()
     write_param_snapshot(
         parameter_dict,
         end_time,
@@ -373,6 +414,12 @@ for i in pbar:
     global_step += n_steps - 1
     global_step += 1
     simulation_time = end_time
+
+    if (
+        junction_tracker is not None
+        and (i + 1) % args.decision_flush_loops == 0
+    ):
+        junction_tracker.flush(output_dir)
 
     if finished:
         conc[-1, :, :] = conc[exit_timestep % n_steps, :, :]
@@ -401,6 +448,9 @@ for i in pbar:
         f"Loop {i}: {loop_duration:.3f} s",
         flush=True,
     )
+
+if junction_tracker is not None:
+    junction_tracker.flush(output_dir)
 
 job_id = args.shot
 

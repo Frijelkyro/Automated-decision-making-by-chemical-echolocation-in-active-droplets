@@ -1,0 +1,22 @@
+maze_file = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/Ran_maze_size_prop_to_droplet_testrun.tsv"
+maze_hash = "df0315076b1fb00fdf23debeab4920ff385d1692d34d3389d346d7f6ae934ebb"
+wall_value = 1
+dx = 1.0
+goal_tolerance = 2.0
+grid_shape = [32, 54]
+simulation_shape = [54, 32]
+path_length = 40
+emitter_grid = [16, 3]
+goal_grid = [14, 38]
+plot_path = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/Ran_maze_size_prop_to_droplet_testrun_analysis/maze_decision_zones.png"
+zone_extent = "maximal"
+emitter_position = [2.1, 14.8]
+static_source_position = [42.5, 20.5]
+
+[[junctions]]
+id = "J01"
+center = [16, 7]
+path_index = 3
+branch_count = 3
+kind = "Y"
+neighbors = [[14, 7], [16, 5], [18, 7]]
