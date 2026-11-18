@@ -1,3 +1,4 @@
+import csv
 import os
 import re
 import shutil
@@ -349,7 +350,8 @@ def write_parameters(**parameters):
     )
     with open(numbered_filename, "w") as param_file:
         for key, value in parameters.items():
-            param_file.write(f"{key}: {value}\n")
+            if not key.startswith("_"):
+                param_file.write(f"{key}: {value}\n")
 
     return numbered_filename
 
@@ -371,6 +373,13 @@ def write_param_snapshot(parameters, simulation_time, resume_step, concentration
         "resume_step": resume_step,
         "simulation_time": simulation_time,
     }
+    if "_junction_pending" in parameters:
+        state["junction_ids"] = np.asarray(parameters["_junction_ids"], dtype="U")
+        state["junction_pending"] = parameters["_junction_pending"]
+        state["junction_decided"] = parameters["_junction_decided"]
+        state["junction_decision_events"] = np.asarray(
+            parameters["_junction_decision_events"], dtype=np.float64
+        ).reshape((-1, 5))
     if concentration is not None:
         state["concentration"] = concentration
 
@@ -378,7 +387,12 @@ def write_param_snapshot(parameters, simulation_time, resume_step, concentration
 
     with open(param_filename, "w") as f:
         for key, value in parameters.items():
-            if key not in {"birth_times", "active_mask", "dead_tracker", "exit_trigger_time"}:
+            if key not in {
+                "birth_times",
+                "active_mask",
+                "dead_tracker",
+                "exit_trigger_time",
+            } and not key.startswith("_"):
                 f.write(f"{key}: {value}\n")
         f.write(f"state_filename: {state_filename}\n") # TODO make a checkpoint statefile persist if it has been used and mark it with globaltimestep? or sim_time?
         f.write(f"simulation_time: {simulation_time}\n")
@@ -535,6 +549,88 @@ def write_particles(
     np.savez(f"{file_prefix}_{timestep}.npz", **data)
 
 
+def write_junction_decisions(filename, junction_ids, events):
+    """Append buffered particle decisions as timestep-resolved CSV rows."""
+    if not events:
+        return
+
+    write_header = not os.path.exists(filename) or os.path.getsize(filename) == 0
+    with open(filename, "a", newline="", encoding="utf-8") as event_file:
+        writer = csv.writer(event_file)
+        if write_header:
+            writer.writerow(
+                ["timestep", "simulation_time", "particle_id", "junction_id", "correct"]
+            )
+        for timestep, simulation_time, particle_id, junction_index, correct in events:
+            writer.writerow(
+                [
+                    int(timestep),
+                    f"{float(simulation_time):.12g}",
+                    int(particle_id),
+                    junction_ids[int(junction_index)],
+                    int(correct),
+                ]
+            )
+    events.clear()
+
+
+def track_junction_decisions(
+    timestep,
+    simulation_time,
+    particle_ids,
+    active_mask,
+    px_bins,
+    py_bins,
+    before_masks,
+    correct_masks,
+    wrong_masks,
+    junction_pending,
+    junction_decided,
+    decision_events,
+):
+    """Update each particle's pending junction and append any first decision."""
+    if not len(before_masks):
+        return
+
+    inside = (
+        active_mask
+        & (px_bins >= 0)
+        & (px_bins < before_masks.shape[1])
+        & (py_bins >= 0)
+        & (py_bins < before_masks.shape[2])
+    )
+    particle_slots = np.flatnonzero(inside)
+    if not len(particle_slots):
+        return
+
+    x_bins = px_bins[particle_slots]
+    y_bins = py_bins[particle_slots]
+    in_before = before_masks[:, x_bins, y_bins].T
+    junction_pending[particle_slots] |= in_before & ~junction_decided[particle_slots]
+    eligible = junction_pending[particle_slots] & ~junction_decided[particle_slots]
+    in_correct = correct_masks[:, x_bins, y_bins].T & eligible
+    in_wrong = wrong_masks[:, x_bins, y_bins].T & eligible
+    overlap = in_correct & in_wrong
+    if np.any(overlap):
+        raise ValueError("A particle entered overlapping correct and wrong junction zones.")
+
+    particle_indices, junction_indices = np.where(in_correct | in_wrong)
+    for particle_index, junction_index in zip(particle_indices, junction_indices):
+        particle_slot = int(particle_slots[particle_index])
+        correct = bool(in_correct[particle_index, junction_index])
+        decision_events.append(
+            (
+                int(timestep),
+                float(simulation_time),
+                int(particle_ids[particle_slot]),
+                int(junction_index),
+                int(correct),
+            )
+        )
+        junction_pending[particle_slot, junction_index] = False
+        junction_decided[particle_slot, junction_index] = True
+
+
 
 def chemical_solver(
     c,
@@ -601,6 +697,12 @@ def chemical_solver(
     exit_zone_map = kwargs.get("exit_zone_map", np.zeros_like(maze, dtype=bool))
     grim_reaper_delay = kwargs.get("grim_reaper_delay", 0)
     exit_trigger_time = kwargs.get("exit_trigger_time", np.full(num_particles, np.inf))
+    junction_before_masks = kwargs.get("_junction_before_masks")
+    junction_correct_masks = kwargs.get("_junction_correct_masks")
+    junction_wrong_masks = kwargs.get("_junction_wrong_masks")
+    junction_pending = kwargs.get("_junction_pending")
+    junction_decided = kwargs.get("_junction_decided")
+    junction_decision_events = kwargs.get("_junction_decision_events")
     emitter_position = np.array(
         kwargs.get("emitter_position", (0.0, 0.0)), dtype=np.float32
     )
@@ -1023,6 +1125,22 @@ def chemical_solver(
             velocity[ready_to_reap, t:, :] = np.nan
 
         active_mask[dead_tracker] = False
+
+        if junction_before_masks is not None:
+            track_junction_decisions(
+                timestep + 1,
+                simulation_time + dt,
+                np.arange(num_particles),
+                active_mask,
+                px_bins,
+                py_bins,
+                junction_before_masks,
+                junction_correct_masks,
+                junction_wrong_masks,
+                junction_pending,
+                junction_decided,
+                junction_decision_events,
+            )
 
         # Check if all particles have successfully exited or died
         has_exited_or_died = np.isfinite(exit_trigger_time) | dead_tracker

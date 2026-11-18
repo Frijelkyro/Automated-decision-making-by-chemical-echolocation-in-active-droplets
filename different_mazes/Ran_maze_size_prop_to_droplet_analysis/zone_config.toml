@@ -2,99 +2,99 @@
 # Adjust values and rerun the script to regenerate masks and plots.
 
 [J01]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J016]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J02]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J03]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J04]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J05]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J06]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J07]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J08]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J09]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J10]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J11]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J116]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J12]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J13]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J14]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J15]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J16]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J17]
-before = 2
-correct = 6
-wrong = 6
+before = 4
+correct = 7
+wrong = 7
 
 [J18]
 before = 8

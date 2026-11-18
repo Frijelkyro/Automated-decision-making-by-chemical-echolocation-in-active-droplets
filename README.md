@@ -95,6 +95,12 @@ When `resume_simulation = true`, rerunning a series with the same name resumes i
 
 
 
+### Junction decision tracking
+
+Generate maze junction zones before a run with `python scripts/maze_skeleton_path.py`. This creates `zone_masks.npz` and an editable `zone_config.toml` in that maze's `*_analysis/` directory. Distances are measured in skeleton cells: the before zone is never closer than 4 cells to its junction, and correct/wrong zones default to 7 cells. Correct and wrong masks are kept disjoint. Edit each `[JunctionID]` table in `zone_config.toml` to change those distances.
+
+When zone masks are present beside the configured maze, the solver records each particle's first correct (`1`) or wrong (`0`) decision per junction in `junction_decisions.csv` in the data directory. Rows contain timestep, simulation time, particle ID, junction ID, and the decision value. Records are buffered and written every 10 solver loops by default; change this with `--decision-write-every-loops`. Pass `--junction-zone-masks` to use a different mask file. The decision state is checkpointed with the simulation, and resuming truncates decision rows and buffered events beyond the restored checkpoint timestep.
+
 ## Configuration and parameters
 
 - `maze_cluster_script.py` contains the main parameter block (diffusion coefficients, time step `dt`, `n_steps`, `dx`, particle counts, source strengths, etc.). Edit that file to experiment with different regimes.
@@ -118,4 +124,3 @@ n_steps = 4000
 - Particle files (`data/part_<t>.npz`) contain `timestep`, `simulation_time`, and per-particle position, velocity, orientation, and angular velocity arrays.
 
 `--concentration-every-particle-snapshots` controls the heatmap cadence: `2` writes one concentration snapshot for every two particle snapshots. The video holds each heatmap while displaying the intervening particle snapshots; it renders only the particle history covered by the retained concentration snapshots. The default is `2`.
-

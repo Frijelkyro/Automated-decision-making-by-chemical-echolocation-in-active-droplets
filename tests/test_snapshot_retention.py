@@ -64,10 +64,19 @@ def test_write_concentration_prunes_snapshots_outside_timestep_window(tmp_path):
 
 
 def test_resume_uses_checkpoint_concentration_without_heatmap_file(tmp_path):
+    decision_file = tmp_path / "junction_decisions.csv"
+    decision_file.write_text(
+        "timestep,simulation_time,particle_id,junction_id,correct\n"
+        "8,0.8,0,J01,1\n"
+        "10,1.0,0,J01,0\n"
+        "12,1.2,0,J01,1\n",
+        encoding="utf-8",
+    )
     (tmp_path / "param_checkpoint.txt").write_text(
         "num_particles: 1\n"
         "file_prefix_conc: conc\n"
         "file_prefix_part: part\n"
+        f"junction_decisions_filename: {decision_file}\n"
         "dt: 0.1\n"
     )
     np.savez_compressed(
@@ -79,6 +88,13 @@ def test_resume_uses_checkpoint_concentration_without_heatmap_file(tmp_path):
         resume_step=10,
         simulation_time=1.0,
         concentration=np.full((2, 2), 7.0, dtype=np.float32),
+        junction_ids=np.array(["J01"]),
+        junction_pending=np.array([[True]]),
+        junction_decided=np.array([[False]]),
+        junction_decision_events=np.array(
+            [[9, 0.9, 0, 0, 1], [10, 1.0, 0, 0, 0], [11, 1.1, 0, 0, 0]],
+            dtype=float,
+        ),
     )
     np.savez(
         tmp_path / "part_10.npz",
@@ -99,3 +115,7 @@ def test_resume_uses_checkpoint_concentration_without_heatmap_file(tmp_path):
 
     assert np.array_equal(restored[0][0], np.full((2, 2), 7.0))
     assert restored[9] == 10
+    assert restored[12]["junction_pending"].tolist() == [[True]]
+    assert restored[12]["junction_ids"].tolist() == ["J01"]
+    assert restored[12]["junction_decision_events"] == [(9, 0.9, 0, 0, 1)]
+    assert decision_file.read_text(encoding="utf-8").count("\n") == 3

@@ -2,11 +2,14 @@ maze_file = "different_mazes/Ran_maze_size_prop_to_droplet.tsv"
 wall_value = 1
 dx = 1.0
 goal_tolerance = 2.0
+emitter_position = [2.1, 84.1]
+static_source_position = [90.2, 10.5]
 grid_shape = [110, 99]
 path_length = 588
 emitter_grid = [27, 3]
 goal_grid = [94, 84]
 plot_path = "different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_decision_zones.png"
+zone_extent = "maximal"
 
 
 [[junctions]]

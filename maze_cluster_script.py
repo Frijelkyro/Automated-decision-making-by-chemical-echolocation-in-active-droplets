@@ -27,6 +27,59 @@ def parse_bool(value):
     raise argparse.ArgumentTypeError("expected true or false")
 
 
+def load_junction_zone_masks(maze_path, maze_shape, mask_path=None):
+    if mask_path is None:
+        mask_path = maze_path.parent / f"{maze_path.stem}_analysis" / "zone_masks.npz"
+    else:
+        mask_path = mask_path.expanduser()
+        if not mask_path.is_absolute():
+            mask_path = Path(__file__).resolve().parent / mask_path
+
+    if not mask_path.is_file():
+        return mask_path, [], None, None, None
+
+    with np.load(mask_path) as stored:
+        junction_ids = sorted(
+            name[: -len("_before")]
+            for name in stored.files
+            if name.endswith("_before")
+        )
+        masks = {label: [] for label in ("before", "correct", "wrong")}
+        for junction_id in junction_ids:
+            for label in masks:
+                key = f"{junction_id}_{label}"
+                if key not in stored.files:
+                    raise ValueError(f"{mask_path} is missing the {key} mask.")
+                raw_mask = np.asarray(stored[key], dtype=bool)
+                if raw_mask.ndim != 2:
+                    raise ValueError(f"{key} in {mask_path} must be a 2D mask.")
+                maze_mask = np.rot90(raw_mask, k=-1)
+                if maze_mask.shape != maze_shape:
+                    raise ValueError(
+                        f"{key} has shape {maze_mask.shape}, expected maze shape {maze_shape}."
+                    )
+                masks[label].append(maze_mask)
+
+            if np.any(masks["correct"][-1] & masks["wrong"][-1]):
+                raise ValueError(
+                    f"{junction_id} correct and wrong masks overlap in {mask_path}."
+                )
+
+    if not junction_ids:
+        return mask_path, [], None, None, None
+    stacked_masks = {
+        label: np.stack(label_masks)
+        for label, label_masks in masks.items()
+    }
+    return (
+        mask_path,
+        junction_ids,
+        stacked_masks["before"],
+        stacked_masks["correct"],
+        stacked_masks["wrong"],
+    )
+
+
 parser = argparse.ArgumentParser(description="Run one maze simulation shot.")
 parser.add_argument("--dt", type=float, default=0.0005)
 parser.add_argument("--beta", type=float, default=-8)
@@ -50,6 +103,17 @@ parser.add_argument(
     default=Path(__file__).with_name("maze_startpoints_configuration.toml"),
 )
 parser.add_argument("--resume", type=parse_bool, default=False)
+parser.add_argument(
+    "--junction-zone-masks",
+    type=Path,
+    help="Optional zone_masks.npz path; defaults to the maze's analysis directory.",
+)
+parser.add_argument(
+    "--decision-write-every-loops",
+    type=int,
+    default=10,
+    help="Flush buffered junction decisions after this many solver loops.",
+)
 parser.add_argument("--run-id", default="default")
 parser.add_argument("--shot", type=int, default=0)
 parser.add_argument("--data-dir", default="data")
@@ -57,6 +121,8 @@ parser.add_argument("--output-dir")
 args = parser.parse_args()
 if args.concentration_every_particle_snapshots < 1:
     parser.error("--concentration-every-particle-snapshots must be at least 1")
+if args.decision_write_every_loops < 1:
+    parser.error("--decision-write-every-loops must be at least 1")
 
 config_path = args.startpoints_config.expanduser()
 if not config_path.is_absolute():
@@ -155,6 +221,18 @@ file_prefix_part = os.path.join(data, "part")
 maze = maze_from_file(str(maze_file))
 free_cell_index_map = build_free_cell_index_map(maze)
 wall = np.transpose(np.where(maze == 0))
+junction_mask_path, junction_ids, junction_before_masks, junction_correct_masks, junction_wrong_masks = (
+    load_junction_zone_masks(maze_file, maze.shape, args.junction_zone_masks)
+)
+if junction_before_masks is None:
+    if args.junction_zone_masks is not None:
+        parser.error(f"Junction zone masks not found: {junction_mask_path}")
+    print(
+        f"No junction zone masks found at {junction_mask_path}; "
+        "junction decision tracking is disabled."
+    )
+else:
+    print(f"Tracking decisions for {len(junction_ids)} junctions from {junction_mask_path}")
 
 exit_radius = configured_exit_radius
 grim_reaper_delay = args.grim_reaper_delay
@@ -199,6 +277,9 @@ omega = np.full((num_particles, n_steps), 0.0, dtype=np.float32)
 active_mask = np.zeros(num_particles, dtype=bool)
 dead_tracker = np.zeros(num_particles, dtype=bool)
 exit_trigger_time = np.full(num_particles, np.inf)
+junction_pending = np.zeros((num_particles, len(junction_ids)), dtype=bool)
+junction_decided = np.zeros_like(junction_pending)
+junction_decision_events = []
 
 
 # Default: All particles start at the same emitter location and activate at delayed birth times.
@@ -277,12 +358,27 @@ if resume_simulation:
             resume_step,
             simulation_time,
             resume_old_dt,
+            decision_state,
         ) = resume_simulation_from_file(
             data,
             param_filename,
             maze,
             n_steps,
         )
+        if junction_before_masks is not None and decision_state:
+            if decision_state["junction_ids"].tolist() != junction_ids:
+                raise ValueError(
+                    "Checkpoint junction IDs do not match the currently loaded zone masks."
+                )
+            junction_pending = decision_state["junction_pending"]
+            junction_decided = decision_state["junction_decided"]
+            junction_decision_events = decision_state["junction_decision_events"]
+            expected_shape = (num_particles, len(junction_ids))
+            if junction_pending.shape != expected_shape or junction_decided.shape != expected_shape:
+                raise ValueError(
+                    "Checkpoint junction-decision state does not match the loaded "
+                    f"zones: expected {expected_shape}."
+                )
 
         print(
             f"Resuming from timestep {resume_step} "
@@ -346,6 +442,7 @@ parameter_dict = {
     "grid_filename": grid_filename,
     "file_prefix_conc": file_prefix_conc,
     "file_prefix_part": file_prefix_part,
+    "junction_decisions_filename": os.path.join(data, "junction_decisions.csv"),
     "exit_radius": exit_radius,
     "exit_wall_mask": exit_wall_mask,
     "permeability": permeability,
@@ -353,6 +450,18 @@ parameter_dict = {
     "run_id": args.run_id,
     "shot": args.shot,
 }
+if junction_before_masks is not None:
+    parameter_dict.update(
+        {
+            "_junction_ids": junction_ids,
+            "_junction_before_masks": junction_before_masks,
+            "_junction_correct_masks": junction_correct_masks,
+            "_junction_wrong_masks": junction_wrong_masks,
+            "_junction_pending": junction_pending,
+            "_junction_decided": junction_decided,
+            "_junction_decision_events": junction_decision_events,
+        }
+    )
 
 # --------------- time tracking ---------------------
 init_duration_perf_metric = perf_counter() - init_t0  # time tracking
@@ -395,17 +504,13 @@ for i in pbar:
         **parameter_dict,
     )
 
-    if not exit:
-        write_param_snapshot(
-            parameter_dict,
-            simulation_time,
-            resume_step + i * n_steps,
-            concentration=conc[0],
-        )
-
-    simulation_time += (n_steps - 1) * dt
-
     if exit:
+        if junction_before_masks is not None:
+            write_junction_decisions(
+                parameter_dict["junction_decisions_filename"],
+                junction_ids,
+                junction_decision_events,
+            )
         # current_time = np.repeat(
         #     time[:, i * n_steps : exit_timestep + 1, np.newaxis], num_particles, axis=0
         # )
@@ -451,11 +556,42 @@ for i in pbar:
     theta[:, 0] = theta[:, -1]
     omega[:, 0] = omega[:, -1]
     v[:, 0, :] = v[:, -1, :]
+    simulation_time += (n_steps - 1) * dt
+
+    next_resume_step = resume_step + (i + 1) * n_steps
+    write_particles(
+        file_prefix_part,
+        p,
+        theta,
+        v,
+        omega,
+        f_sp,
+        f_chem,
+        f_int,
+        f_wall,
+        next_resume_step,
+        simulation_time,
+        save_forces=bool(num_particles),
+    )
+    if junction_before_masks is not None and (
+        (i + 1) % args.decision_write_every_loops == 0 or i == time_loop - 1
+    ):
+        write_junction_decisions(
+            parameter_dict["junction_decisions_filename"],
+            junction_ids,
+            junction_decision_events,
+        )
+    write_param_snapshot(
+        parameter_dict,
+        simulation_time,
+        next_resume_step,
+        concentration=conc[0],
+    )
 
     # time tracking
     n_active = active_mask.sum()
     pbar.set_postfix(
-        timestep= resume_step +(i + 1) * n_steps,
+        timestep=next_resume_step,
         active=n_active,
         simulation_time=f"{simulation_time:.0f}s",
     )

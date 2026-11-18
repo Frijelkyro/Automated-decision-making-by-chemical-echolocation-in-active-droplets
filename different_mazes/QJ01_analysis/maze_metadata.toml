@@ -1,4 +1,4 @@
-maze_file = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/QJ01.tsv"
+maze_file = "different_mazes/QJ01.tsv"
 wall_value = 1
 dx = 1.0
 goal_tolerance = 2.0
@@ -8,7 +8,7 @@ grid_shape = [46, 121]
 path_length = 166
 emitter_grid = [33, 5]
 goal_grid = [34, 100]
-plot_path = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/QJ01_analysis/maze_decision_zones.png"
+plot_path = "different_mazes/QJ01_analysis/maze_decision_zones.png"
 zone_extent = "compact"
 
 

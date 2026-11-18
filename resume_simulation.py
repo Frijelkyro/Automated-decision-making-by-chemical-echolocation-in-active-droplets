@@ -1,7 +1,37 @@
 import ast
+import csv
 import os
 import numpy as np
 from list_of_functions import build_free_cell_index_map, expand_concentration
+
+
+def _truncate_junction_decisions(filename, resume_step):
+    if not os.path.exists(filename):
+        return set()
+
+    with open(filename, newline="", encoding="utf-8") as event_file:
+        reader = csv.DictReader(event_file)
+        if reader.fieldnames is None or "timestep" not in reader.fieldnames:
+            raise ValueError(f"Invalid junction-decision file header: {filename}")
+        fieldnames = reader.fieldnames
+        rows = [row for row in reader if int(row["timestep"]) <= resume_step]
+
+    written_events = {
+        (
+            int(row["timestep"]),
+            int(row["particle_id"]),
+            row["junction_id"],
+            int(row["correct"]),
+        )
+        for row in rows
+    }
+    temporary_filename = filename + ".tmp"
+    with open(temporary_filename, "w", newline="", encoding="utf-8") as event_file:
+        writer = csv.DictWriter(event_file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    os.replace(temporary_filename, filename)
+    return written_events
 
 
 def _read_parameter_file(filename):
@@ -74,10 +104,45 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
             if "concentration" in state.files
             else None
         )
+        decision_state = {}
+        if "junction_pending" in state.files:
+            decision_state["junction_ids"] = state["junction_ids"].astype(str)
+            decision_state["junction_pending"] = state["junction_pending"].copy()
+            decision_state["junction_decided"] = state["junction_decided"].copy()
+            buffered_events = state["junction_decision_events"].copy()
+            decision_state["junction_decision_events"] = [
+                (
+                    int(event[0]),
+                    float(event[1]),
+                    int(event[2]),
+                    int(event[3]),
+                    int(event[4]),
+                )
+                for event in buffered_events
+                if int(event[0]) <= resume_step
+            ]
 
     num_particles = int(old["num_particles"])
     conc_prefix = os.path.join(data, os.path.basename(old["file_prefix_conc"]))
     part_prefix = os.path.join(data, os.path.basename(old["file_prefix_part"]))
+    decision_filename = old.get(
+        "junction_decisions_filename",
+        os.path.join(data, "junction_decisions.csv"),
+    )
+    written_events = _truncate_junction_decisions(decision_filename, resume_step)
+    if decision_state:
+        junction_ids = decision_state["junction_ids"].tolist()
+        decision_state["junction_decision_events"] = [
+            event
+            for event in decision_state["junction_decision_events"]
+            if (
+                event[0],
+                event[2],
+                junction_ids[event[3]],
+                event[4],
+            )
+            not in written_events
+        ]
 
     for prefix in (conc_prefix, part_prefix):
         prefix = os.path.basename(prefix)
@@ -124,4 +189,5 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
         resume_step,
         resume_time,
         float(old["dt"]),
+        decision_state,
     )

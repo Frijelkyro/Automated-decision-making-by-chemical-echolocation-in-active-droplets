@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from list_of_functions import track_junction_decisions, write_junction_decisions
 from scripts import maze_skeleton_path as maze_analysis
 from scripts import particle_decision_analysis as analysis
 from scripts import plot_path_concentration as concentration_plot
@@ -71,12 +72,22 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
             {"id": "J02", "center": (3, 11), "cluster": {(3, 11)}},
         ]
 
-        zones = maze_analysis.build_zones(junctions, graph, skeleton, free, path)
+        zones = maze_analysis.build_zones(
+            junctions,
+            graph,
+            skeleton,
+            free,
+            path,
+            zone_distances={
+                "J01": {"before": 2, "correct": 2, "wrong": 1},
+                "J02": {"before": 4, "correct": 2, "wrong": 1},
+            },
+        )
 
-        self.assertTrue(all((row, 2) in zones["J01"]["before"] for row in (2, 3, 4)))
+        self.assertTrue(all((row, 3) in zones["J01"]["before"] for row in (2, 3, 4)))
         self.assertTrue(all((row, 9) in zones["J01"]["correct"] for row in (2, 3, 4)))
-        self.assertIn((0, 7), zones["J01"]["wrong"])
-        self.assertIn((1, 6), zones["J01"]["wrong"])
+        self.assertIn((2, 7), zones["J01"]["wrong"])
+        self.assertFalse(zones["J01"]["correct"] & zones["J01"]["wrong"])
 
     def test_compact_zone_masks_fill_local_corridor_within_five_by_five(self):
         shape = (7, 15)
@@ -101,13 +112,98 @@ class ParticleDecisionAnalysisTests(unittest.TestCase):
             {"id": "J02", "center": (3, 11), "cluster": {(3, 11)}},
         ]
 
-        zones = maze_analysis.build_zones(junctions, graph, skeleton, free, path, zone_extent="compact")
+        zones = maze_analysis.build_zones(
+            junctions,
+            graph,
+            skeleton,
+            free,
+            path,
+            zone_extent="compact",
+            zone_distances={
+                "J01": {"before": 4, "correct": 2, "wrong": 1},
+                "J02": {"before": 4, "correct": 2, "wrong": 1},
+            },
+        )
 
-        for cells in zones["J01"].values():
-            self.assertTrue(all(1 <= row <= 5 and 5 <= col <= 9 for row, col in cells))
-        self.assertIn((2, 5), zones["J01"]["before"])
+        self.assertTrue(all(1 <= row <= 5 and 1 <= col <= 5 for row, col in zones["J01"]["before"]))
+        self.assertIn((2, 3), zones["J01"]["before"])
         self.assertIn((2, 9), zones["J01"]["correct"])
-        self.assertIn((1, 7), zones["J01"]["wrong"])
+        self.assertIn((2, 7), zones["J01"]["wrong"])
+
+    def test_zone_distance_config_defaults_and_overrides(self):
+        config_path = self.root / "zone_config.toml"
+        junctions = [{"id": "J01"}]
+
+        defaults = maze_analysis.load_zone_distances(config_path, junctions)
+        self.assertEqual(defaults["J01"], {"before": 4, "correct": 7, "wrong": 7})
+        self.assertTrue(config_path.is_file())
+
+        config_path.write_text(
+            "[J01]\nbefore = 2\ncorrect = 5\nwrong = 9\n",
+            encoding="utf-8",
+        )
+        customized = maze_analysis.load_zone_distances(config_path, junctions)
+        self.assertEqual(customized["J01"], {"before": 2, "correct": 5, "wrong": 9})
+
+    def test_junction_tracker_records_only_particles_with_pending_before_zone(self):
+        before = np.zeros((1, 5, 5), dtype=bool)
+        correct = np.zeros_like(before)
+        wrong = np.zeros_like(before)
+        before[0, 2, 1] = True
+        correct[0, 2, 3] = True
+        wrong[0, 2, 4] = True
+        pending = np.zeros((2, 1), dtype=bool)
+        decided = np.zeros_like(pending)
+        events = []
+        particle_ids = np.array([4, 9])
+        active = np.ones(2, dtype=bool)
+        px_bins = np.array([2, 2])
+        py_bins = np.array([1, 3])
+
+        track_junction_decisions(
+            10, 1.0, particle_ids, active, px_bins, py_bins,
+            before, correct, wrong, pending, decided, events,
+        )
+        self.assertEqual(events, [])
+        self.assertTrue(pending[0, 0])
+        self.assertFalse(pending[1, 0])
+
+        py_bins[:] = [3, 4]
+        track_junction_decisions(
+            11, 1.1, particle_ids, active, px_bins, py_bins,
+            before, correct, wrong, pending, decided, events,
+        )
+        self.assertEqual(
+            events,
+            [(11, 1.1, 4, 0, 1)],
+        )
+        self.assertTrue(decided[0, 0])
+        self.assertFalse(pending[0, 0])
+
+        py_bins[:] = [3, 1]
+        track_junction_decisions(
+            12, 1.2, particle_ids, active, px_bins, py_bins,
+            before, correct, wrong, pending, decided, events,
+        )
+        self.assertTrue(pending[1, 0])
+        py_bins[:] = [3, 4]
+        track_junction_decisions(
+            13, 1.3, particle_ids, active, px_bins, py_bins,
+            before, correct, wrong, pending, decided, events,
+        )
+        self.assertEqual(events[1], (13, 1.3, 9, 0, 0))
+
+        output = self.root / "junction_decisions.csv"
+        write_junction_decisions(output, ["J01"], events)
+        with output.open(newline="", encoding="utf-8") as event_file:
+            rows = list(csv.DictReader(event_file))
+        self.assertEqual(rows[0]["timestep"], "11")
+        self.assertEqual(rows[0]["simulation_time"], "1.1")
+        self.assertEqual(rows[0]["particle_id"], "4")
+        self.assertEqual(rows[0]["junction_id"], "J01")
+        self.assertEqual(rows[0]["correct"], "1")
+        self.assertEqual(rows[1]["correct"], "0")
+        self.assertEqual(events, [])
 
     def test_start_positions_load_from_maze_config_and_allow_overrides(self):
         config_path = self.root / "startpoints.toml"

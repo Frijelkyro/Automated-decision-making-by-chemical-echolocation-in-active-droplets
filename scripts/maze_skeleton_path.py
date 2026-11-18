@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import heapq
+from collections import deque
 from pathlib import Path
 import tomllib
 
@@ -29,6 +30,7 @@ MAZE_FILE = Path("different_mazes/Ran_maze_size_prop_to_droplet.tsv")
 GOAL_TOLERANCE = 2.0
 DX = 1.0
 COMPACT_ZONE_SIZE = 5
+DEFAULT_ZONE_DISTANCES = {"before": 4, "correct": 7, "wrong": 7}
 
 # Preferred wall convention for TSVs. The project traditionally inverts raw TSVs,
 # but the actual file convention is 1 = wall and 0 = free space.
@@ -65,8 +67,17 @@ def save_metadata(metadata_path: Path, maze_path: Path, maze_data: dict, path_ce
                  goal_position: tuple[float, float] | None = None,
                  zone_extent: str = "maximal") -> None:
     """Save maze metadata and junction summaries for future reuse."""
+    repository_root = Path(__file__).resolve().parents[1]
+
+    def metadata_path_string(path: Path) -> str:
+        resolved_path = path.resolve()
+        try:
+            return resolved_path.relative_to(repository_root).as_posix()
+        except ValueError:
+            return str(path)
+
     lines = [
-        f'maze_file = "{str(maze_path)}"',
+        f'maze_file = "{metadata_path_string(maze_path)}"',
         f'wall_value = {int(maze_data["wall_value"])}',
         f'dx = {float(DX)}',
         f'goal_tolerance = {float(GOAL_TOLERANCE)}',
@@ -74,7 +85,7 @@ def save_metadata(metadata_path: Path, maze_path: Path, maze_data: dict, path_ce
         f'path_length = {len(path_cells)}',
         f'emitter_grid = [{emitter_grid[0]}, {emitter_grid[1]}]',
         f'goal_grid = [{goal_grid[0]}, {goal_grid[1]}]',
-        f'plot_path = "{str(output_plot)}"',
+        f'plot_path = "{metadata_path_string(output_plot)}"',
         f'zone_extent = "{zone_extent}"',
         "",
     ]
@@ -323,8 +334,9 @@ def build_zones(
     free_mask: np.ndarray,
     path: list[tuple[int, int]],
     zone_extent: str = "maximal",
+    zone_distances: dict[str, dict[str, int]] | None = None,
 ) -> dict:
-    """Expand skeleton segments to corridor width, optionally clipping to 5x5."""
+    """Build corridor-width zones at configured graph distances from junctions."""
     if zone_extent not in {"maximal", "compact"}:
         raise ValueError("zone_extent must be 'maximal' or 'compact'.")
     if not path:
@@ -349,28 +361,23 @@ def build_zones(
         region = free_mask & centerline_mask[nearest_rows, nearest_cols]
         return {tuple(map(int, cell)) for cell in np.argwhere(region)}
 
-    def trace_wrong_branch(cluster):
-        """Follow every off-route branch from this junction through its terminal leaves."""
-        frontier = sorted(
+    def trace_wrong_branches(cluster):
+        """Return off-route branch cells with their graph distance from the junction."""
+        frontier = deque(sorted(
             neighbor
             for cell in cluster
             for neighbor in graph.get(cell, [])
             if neighbor not in cluster and neighbor not in path_set
-        )
-        branch_cells = set()
+        ))
+        distances = {cell: 1 for cell in frontier}
         while frontier:
-            cell = frontier.pop()
-            if cell in branch_cells or cell in cluster or cell in path_set:
-                continue
-            branch_cells.add(cell)
-            frontier.extend(
-                neighbor
-                for neighbor in graph.get(cell, [])
-                if neighbor not in branch_cells
-                and neighbor not in cluster
-                and neighbor not in path_set
-            )
-        return branch_cells
+            cell = frontier.popleft()
+            for neighbor in graph.get(cell, []):
+                if neighbor in cluster or neighbor in path_set or neighbor in distances:
+                    continue
+                distances[neighbor] = distances[cell] + 1
+                frontier.append(neighbor)
+        return distances
 
     normalized_junctions = []
     for junction in junctions:
@@ -388,43 +395,64 @@ def build_zones(
         normalized_junctions.append((path_index, junction, cluster))
 
     normalized_junctions.sort(key=lambda item: item[0])
-    for junction_order, (path_index, junction, cluster) in enumerate(normalized_junctions):
+    for path_index, junction, cluster in normalized_junctions:
         jid = junction["id"]
-        previous_index = (
-            normalized_junctions[junction_order - 1][0]
-            if junction_order
-            else 0
-        )
-        next_index = (
-            normalized_junctions[junction_order + 1][0]
-            if junction_order + 1 < len(normalized_junctions)
-            else len(path) - 1
-        )
-        before_segment = path[previous_index : path_index + 1]
-        correct_segment = path[path_index : next_index + 1]
-        wrong_segment = trace_wrong_branch(cluster)
-        zones_for_junction = {
-            "before": expand_to_walls(before_segment),
-            "correct": expand_to_walls(correct_segment),
-            "wrong": expand_to_walls(wrong_segment),
+        configured_distances = (zone_distances or {}).get(jid, {})
+        distances = {
+            **DEFAULT_ZONE_DISTANCES,
+            **configured_distances,
         }
+        before_distance = max(4, distances["before"])
+        correct_distance = distances["correct"]
+        wrong_distance = distances["wrong"]
+        before_index = path_index - before_distance
+        correct_index = path_index + correct_distance
+        before_anchor = path[before_index] if before_index >= 0 else None
+        correct_anchor = path[correct_index] if correct_index < len(path) else None
+        branch_distances = trace_wrong_branches(cluster)
+        wrong_anchors = {
+            cell for cell, distance in branch_distances.items()
+            if distance == wrong_distance
+        }
+
+        zones_for_junction = {
+            "before": expand_to_walls([before_anchor] if before_anchor else []),
+            "correct": expand_to_walls([correct_anchor] if correct_anchor else []),
+            "wrong": expand_to_walls(wrong_anchors),
+        }
+        zones_for_junction["wrong"] -= zones_for_junction["correct"]
+
         if zone_extent == "compact":
-            center_row, center_col = junction["center"]
             radius = COMPACT_ZONE_SIZE // 2
+            anchors = {
+                "before": before_anchor,
+                "correct": correct_anchor,
+                "wrong": wrong_anchors,
+            }
             for label, cells in zones_for_junction.items():
-                zones_for_junction[label] = {
-                    cell
-                    for cell in cells
-                    if abs(cell[0] - center_row) <= radius
-                    and abs(cell[1] - center_col) <= radius
-                }
+                anchor = anchors[label]
+                if label == "wrong":
+                    zones_for_junction[label] = {
+                        cell
+                        for cell in cells
+                        if any(
+                            abs(cell[0] - target[0]) <= radius
+                            and abs(cell[1] - target[1]) <= radius
+                            for target in anchor
+                        )
+                    }
+                elif anchor is not None:
+                    zones_for_junction[label] = {
+                        cell for cell in cells
+                        if abs(cell[0] - anchor[0]) <= radius
+                        and abs(cell[1] - anchor[1]) <= radius
+                    }
 
         result[jid] = zones_for_junction
 
         print(
-            f"{jid}: before path={previous_index}:{path_index}, "
-            f"correct path={path_index}:{next_index}, "
-            f"wrong skeleton cells={len(wrong_segment)}; "
+            f"{jid}: zone distances={distances}, "
+            f"wrong branch skeleton cells={len(wrong_anchors)}; "
             f"cells={ {k: len(v) for k, v in zones_for_junction.items()} }"
         )
 
@@ -581,6 +609,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Goal/static-source position in simulation coordinates.",
     )
     parser.add_argument("--zone-extent", choices=("maximal", "compact"), default="maximal")
+    parser.add_argument(
+        "--zone-config",
+        type=Path,
+        help="TOML file with per-junction before/correct/wrong distances.",
+    )
     return parser
 
 
@@ -628,6 +661,47 @@ def load_start_positions(
     return as_position(emitter, "emitter_position"), as_position(goal, "static_source_position")
 
 
+def load_zone_distances(config_path: Path, junctions: list[dict]) -> dict[str, dict[str, int]]:
+    """Load per-junction distances, creating an editable defaults file if needed."""
+    if not config_path.exists():
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# Distances are measured in skeleton cells from each junction.",
+            "# The before distance is clamped to at least 4 cells.",
+            "",
+        ]
+        for junction in junctions:
+            lines.extend(
+                [
+                    f'[{junction["id"]}]',
+                    "before = 4",
+                    "correct = 7",
+                    "wrong = 7",
+                    "",
+                ]
+            )
+        config_path.write_text("\n".join(lines), encoding="utf-8")
+
+    with config_path.open("rb") as config_file:
+        configuration = tomllib.load(config_file)
+
+    distances = {}
+    for junction in junctions:
+        junction_id = junction["id"]
+        values = configuration.get(junction_id, {})
+        if not isinstance(values, dict):
+            raise ValueError(f"{junction_id} in {config_path} must be a TOML table.")
+        distances[junction_id] = {}
+        for label, default in DEFAULT_ZONE_DISTANCES.items():
+            value = values.get(label, default)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(
+                    f"{junction_id}.{label} in {config_path} must be a positive integer."
+                )
+            distances[junction_id][label] = value
+    return distances
+
+
 def main(argv: list[str] | None = None):
     parser = build_argument_parser()
     args = parser.parse_args(argv)
@@ -665,6 +739,9 @@ def main(argv: list[str] | None = None):
 
     analysis_dir = analysis_dir_for_maze(path)
     analysis_dir.mkdir(parents=True, exist_ok=True)
+    zone_config_path = args.zone_config or analysis_dir / "zone_config.toml"
+    if not zone_config_path.is_absolute():
+        zone_config_path = resolve_maze_path(zone_config_path)
 
     maze_data = load_maze(path)
     free_mask = maze_data["free_mask"]
@@ -678,7 +755,16 @@ def main(argv: list[str] | None = None):
     graph = build_graph(skeleton)
     # drop the last junction, as this is most likely already at the goal
     junctions = order_junctions_by_path(find_junctions(skeleton, graph), path_cells)[:-1]
-    zones = build_zones(junctions, graph, skeleton, free_mask, path_cells, zone_extent=args.zone_extent)
+    zone_distances = load_zone_distances(zone_config_path, junctions)
+    zones = build_zones(
+        junctions,
+        graph,
+        skeleton,
+        free_mask,
+        path_cells,
+        zone_extent=args.zone_extent,
+        zone_distances=zone_distances,
+    )
 
     for jid, masks in zones.items():
         print(
