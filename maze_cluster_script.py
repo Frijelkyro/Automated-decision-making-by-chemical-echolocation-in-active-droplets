@@ -9,6 +9,7 @@ from resume_simulation import resume_simulation_from_file
 from list_of_functions import (
     chemical_solver,
     initialize_c,
+    SimParams,
     write_param_snapshot,
 )
 
@@ -28,11 +29,11 @@ def parse_bool(value):
 
 
 parser = argparse.ArgumentParser(description="Run one maze simulation shot.")
-parser.add_argument("--dt", type=float, default=0.0005)
+parser.add_argument("--dt", type=float, default=5e-4)
 parser.add_argument("--beta", type=float, default=-8)
 parser.add_argument("--emission-rate", type=float, default=0.5)
 parser.add_argument("--grim-reaper-delay", type=float, default=6.0)
-parser.add_argument("--desired-time", type=float, default=80)
+parser.add_argument("--desired-time", type=float, default=200)
 parser.add_argument("--write-every", type=int, default=100)
 parser.add_argument("--n-steps", type=int, default=100)
 parser.add_argument("--num-particles", type=int, default=60)
@@ -80,37 +81,42 @@ except (KeyError, OSError, tomllib.TOMLDecodeError, TypeError, ValueError) as er
 init_t0 = perf_counter()  # time tracking
 beta = args.beta
 
-Dc = 2.0 * 10 ** (2)  # diffusion coefficient of the chemical (100)
-Dp = 1.0 * 10 ** (0)  # noise strength for the particle (0.1)
-Bp = beta * 10 ** (4)  # chemotactic sensitivity (CR: -16000, CA:16000)
+dc = 2e2  # diffusion coefficient of the chemical (100)
+dp = 1e0  # noise strength for the particle (0.1)
+bp = beta * 1e4  # chemotactic sensitivity (CR: -16000, CA:16000)
 moving_source_production_strength = 1.0  # strength of the source
 moving_source_decay_rate = 1 / 70  # characteristic decay rate of the source
 global_decay_strength = 0.0  # evaporation of chemical from environment
-self_propulsion_speed = 0.0 * 10 ** (1)  # self-propulsion speed of the particle (1.0)
+self_propulsion_speed = 0.0 * 1e1  # self-propulsion speed of the particle (1.0)
 sp_decay_rate = 0.0  # characteristic decay rate of the self-propulsion
 self_propulsion_frequency = 0.0  # self-propulsion angular velocity of the particle
-Dr = 3.0  # rotational diffusion coefficient of the particle (1.0)
-M = 1.0 * 10 ** (-1)  # mass of the particle (0.001, 0.2)
-J = 4.0 * 10 ** (-2)  # moment of inertia of the particle (0.001, 0.06)
+dr = 3.0  # rotational diffusion coefficient of the particle (1.0)
+particle_mass = 1e-1  # mass of the particle (0.001, 0.2)
+particle_moment_inertia = 4e-2  # moment of inertia of the particle (0.001, 0.06)
 
-epsilon_LJ = 0.10  # Lennard-Jones potential parameter for interaction between particles
+epsilon_lj = 0.10  # Lennard-Jones potential parameter for interaction between particles
 static_source_production_strength = 0.0  # Strength of the static source
 static_source_decay_rate = 0.0  # characteristic decay rate of the source
 
 advection = False  # whether to include advection term in the chemical equation
 massive_particle = True  # whether to include mass in the particle equation
+moving_source_decay = False
+static_source_decay = False
 
 # Simulation parameters
 dx = 1.0  # grid spacing
-Lx = 100.0  # domain size
-Ly = 100.0  # domain size
-n_xbins = int(Lx / dx)  # number of bins in x direction
-n_ybins = int(Ly / dx)  # number of bins in y direction
+lx = 1e2  # domain size
+ly = 1e2  # domain size
+n_xbins = int(lx / dx)  # number of bins in x direction
+n_ybins = int(ly / dx)  # number of bins in y direction
 n_steps = args.n_steps
 dt = args.dt  # time step size
+# A dt time increment is a unit of simulation time; code logic uses unitless time.
+# The physical time unit is 1e-3 normal seconds, so plotting normal time
+# from simulation_time uses simulation_time * 10 sec.
 desired_time = args.desired_time
 time_loop = int(np.ceil(desired_time / n_steps / dt)) if desired_time else 2250
-gamma = (Dc * dt) / (dx**2)  # gamma parameter
+gamma = (dc * dt) / (dx**2)  # gamma parameter
 
 # local_step = 0       # integer, position within the current solver call
 simulation_time = 0.0  # physical time to start with TODO in seconds?
@@ -239,60 +245,63 @@ if resume_simulation:
         print(f"No checkpoint found in {data}; starting this shot from scratch.")
 
 
-# build a parameter dictionary
-parameter_dict = {
-    "Dc": Dc,
-    "Dp": Dp,
-    "Bp": Bp,
-    "moving_source_production_strength": moving_source_production_strength,
-    "sp_decay_rate": sp_decay_rate,
-    "moving_source_decay_rate": moving_source_decay_rate,
-    "static_source_decay_rate": static_source_decay_rate,
-    "global_decay_strength": global_decay_strength,
-    "self_propulsion_speed": self_propulsion_speed,
-    "self_propulsion_frequency": self_propulsion_frequency,
-    "Dr": Dr,
-    "M": M,
-    "J": J,
-    "epsilon_LJ": epsilon_LJ,
-    "static_source_position": static_source_position,
-    "maze_file": str(maze_file),
-    "maze_config": maze_config_name,
-    "emitter_jitter": tuple(emitter_jitter),
-    "static_source_production_strength": static_source_production_strength,
-    "advection": advection,
-    "massive_particle": massive_particle,
-    "dx": dx,
-    "Lx": Lx,
-    "Ly": Ly,
-    "n_xbins": n_xbins,
-    "n_ybins": n_ybins,
-    "n_steps": n_steps,
-    "dt": dt,
-    "gamma": gamma,
-    "write_every": write_every,
-    "num_particles": num_particles,
-    "time_loop": time_loop,
-    "birth_times": birth_times,
-    "active_mask": active_mask,
-    "dead_tracker": dead_tracker,
-    "death_zone_map": death_zone_map,
-    "exit_zone_map": exit_zone_map,
-    "birth_zone_map": birth_zone_map,
-    "grim_reaper_delay": grim_reaper_delay,
-    "exit_trigger_time": exit_trigger_time,
-    "emitter_position": tuple(emitter_position),
-    "param_filename": param_filename,
-    "grid_filename": grid_filename,
-    "file_prefix_conc": file_prefix_conc,
-    "file_prefix_part": file_prefix_part,
-    "exit_radius": exit_radius,
-    "exit_wall_mask": exit_wall_mask,
-    "permeability": permeability,
-    "run_id": args.run_id,
-    "shot": args.shot,
-    "seed": args.seed,
-}
+# Build one parameter source and serialize its legacy parameter-file keys from it.
+sim_params = SimParams(
+    dx=dx,
+    dc=dc,
+    dp=dp,
+    bp=bp,
+    moving_source_production_strength=moving_source_production_strength,
+    static_source_production_strength=static_source_production_strength,
+    moving_source_decay_rate=moving_source_decay_rate,
+    static_source_decay_rate=static_source_decay_rate,
+    sp_decay_rate=sp_decay_rate,
+    global_decay_strength=global_decay_strength,
+    self_propulsion_speed=self_propulsion_speed,
+    self_propulsion_frequency=self_propulsion_frequency,
+    dr=dr,
+    particle_mass=particle_mass,
+    particle_moment_inertia=particle_moment_inertia,
+    lx=lx,
+    ly=ly,
+    n_xbins=n_xbins,
+    n_ybins=n_ybins,
+    n_steps=n_steps,
+    dt=dt,
+    gamma=gamma,
+    time_loop=time_loop,
+    write_every=write_every,
+    num_particles=num_particles,
+    param_filename=param_filename,
+    grid_filename=grid_filename,
+    file_prefix_conc=file_prefix_conc,
+    file_prefix_part=file_prefix_part,
+    advection=advection,
+    massive_particle=massive_particle,
+    moving_source_decay=moving_source_decay,
+    static_source_decay=static_source_decay,
+    epsilon_lj=epsilon_lj,
+    static_source_position=static_source_position,
+    exit_radius=exit_radius,
+    birth_times=birth_times,
+    active_mask=active_mask,
+    dead_tracker=dead_tracker,
+    death_zone_map=death_zone_map,
+    exit_zone_map=exit_zone_map,
+    birth_zone_map=birth_zone_map,
+    grim_reaper_delay=grim_reaper_delay,
+    exit_trigger_time=exit_trigger_time,
+    emitter_position=emitter_position,
+    permeability=permeability,
+    exit_wall_mask=exit_wall_mask,
+    maze_file=str(maze_file),
+    maze_config=maze_config_name,
+    emitter_jitter=tuple(emitter_jitter),
+    run_id=args.run_id,
+    shot=args.shot,
+    seed=args.seed,
+)
+parameter_dict = sim_params.to_parameter_dict()
 
 # --------------- time tracking ---------------------
 init_duration_perf_metric = perf_counter() - init_t0  # time tracking
@@ -308,37 +317,32 @@ pbar = tqdm(range(time_loop), desc="Simulation", unit="loop")
 for i in pbar:
     loop_t0 = perf_counter()  # time tracking
 
-    (
-        conc,
-        p,
-        theta,
-        v,
-        omega,
-        f_sp,
-        f_chem,
-        f_int,
-        f_wall,
-        exit,
-        exit_timestep,
-        exit_trigger_time,
-    ) = chemical_solver(
+    solver_result = chemical_solver(
         conc,
         p,
         theta,
         v,
         omega,
         maze,
+        sim_params,
         start_step=resume_step + i * n_steps,
         start_time=simulation_time,
-        **parameter_dict,
     )
+    conc = solver_result.concentration
+    p = solver_result.position
+    theta = solver_result.theta
+    v = solver_result.velocity
+    omega = solver_result.ang_velocity
+    exit_trigger_time = solver_result.exit_trigger_time
+    exit_timestep = solver_result.exit_timestep
+    finished = solver_result.finished
 
-    if not exit:
+    if not finished:
         write_param_snapshot(parameter_dict, simulation_time, resume_step + i * n_steps)
 
     simulation_time += (n_steps - 1) * dt
 
-    if exit:
+    if finished:
         conc[-1, :, :] = conc[exit_timestep % n_steps, :, :]
         loop_duration = perf_counter() - loop_t0
         print(

@@ -36,3 +36,24 @@
   - `python -m compileall -q maze_cluster_script.py list_of_functions.py maze_functions.py scripts/run_parallel.py`
 - Known issues / TODO for later tasks:
   - Removed functions/code: `compute_birth_times`, `load_c_from_file`, `initialize_c_from_file`, `noflux`, `full_traj`, `column_names`, and the `drops_added_incremental = False` branch.
+
+## T2 Refactor the solver interface
+- Files changed:
+  - `list_of_functions.py`
+  - `maze_cluster_script.py`
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - `SimParams` fields: `dx`, `dc`, `dp`, `bp`, `moving_source_production_strength`, `static_source_production_strength`, `moving_source_decay_rate`, `static_source_decay_rate`, `sp_decay_rate`, `global_decay_strength`, `self_propulsion_speed`, `self_propulsion_frequency`, `dr`, `particle_mass`, `particle_moment_inertia`, `lx`, `ly`, `n_xbins`, `n_ybins`, `n_steps`, `dt`, `gamma`, `time_loop`, `write_every`, `num_particles`, `param_filename`, `grid_filename`, `file_prefix_conc`, `file_prefix_part`, `advection`, `massive_particle`, `moving_source_decay`, `static_source_decay`, `epsilon_lj`, `static_source_position`, `exit_radius`, `birth_times`, `active_mask`, `dead_tracker`, `death_zone_map`, `exit_zone_map`, `birth_zone_map`, `grim_reaper_delay`, `exit_trigger_time`, `emitter_position`, `permeability`, `exit_wall_mask`, `maze_file`, `maze_config`, `emitter_jitter`, `run_id`, `shot`, `seed`.
+  - `SolverResult` fields: `concentration`, `position`, `theta`, `velocity`, `ang_velocity`, `forces_self_propulsion`, `forces_chemotaxis`, `forces_interaction`, `forces_wall`, `finished`, `exit_timestep`, `exit_trigger_time`.
+  - `save_snapshot(file_prefix_conc, file_prefix_part, concentration, particles, theta, velocity, ang_velocity, forces_self_propulsion, forces_chemotaxis, forces_interaction, forces_wall, timestep, simulation_time, n_steps, save_forces=True)`.
+- Behavior changes vs. before (esp. physics/RNG):
+  - Solver parameters are passed through `SimParams`; the return value is `SolverResult` and the completion flag is named `finished`.
+  - Concentration and particle NPZ writes share `save_snapshot`.
+  - Python and NumPy inputs, equations, RNG draws, and serialized parameter names remain unchanged.
+  - Argument defaults for the direct simulation script now match the `qj01_rate_reaper_sweep_200s.toml` defaults for `desired_time`, `dt`, `beta`, `write_every`, `n_steps`, and `test_run`.
+  - Simulation time remains unitless in code; for plotting, multiply it by 10 seconds (`simulation_time * 10 sec`) from the 1e-3 normal-second time unit.
+- How to test (exact command):
+  - `.venv/bin/python -m unittest tests.test_seed_regression`
+  - `python -m compileall -q maze_cluster_script.py list_of_functions.py scripts/run_parallel.py`
+- Known issues / TODO for later tasks:
+  - `SimParams.to_parameter_dict()` retains legacy parameter-file key names for byte-compatible checkpoint output.
