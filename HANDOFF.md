@@ -57,3 +57,48 @@
   - `python -m compileall -q maze_cluster_script.py list_of_functions.py scripts/run_parallel.py`
 - Known issues / TODO for later tasks:
   - `SimParams.to_parameter_dict()` retains legacy parameter-file key names for byte-compatible checkpoint output.
+
+## T3 Bug fixes
+- Files changed:
+  - `list_of_functions.py`
+  - `scripts/run_parallel.py`
+  - `tests/baseline/`
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - GNU Parallel jobs now use `--halt-on-error=2`; existing job logs remain the failure record and `--resume-failed` remains the retry path.
+  - No Python function signatures or file formats changed.
+- Behavior changes vs. before (esp. physics/RNG):
+  - Particle spawn bin checks now recompute `px_bins`/`py_bins` from current positions at each solver entry.
+  - Snapshot writes use the global `timestep` instead of `local_step`, correcting cross-solver-call write cadence.
+  - An OOB particle is saved in the snapshot but is no longer marked as an exit or dead particle; the solver raises `RuntimeError`, producing a nonzero shot process exit.
+  - No force calculation, RNG, or concentration equations changed.
+- How to test (exact command):
+  - `.venv/bin/python -m unittest tests.test_seed_regression`
+  - `python -m compileall -q maze_cluster_script.py list_of_functions.py scripts/run_parallel.py scripts/make_jobs.py`
+- Known issues / TODO for later tasks:
+  - The fixed-seed regression baseline was re-recorded after the T3 `write_every` fix using seed `12345`, test-run 20 seconds, `dt=0.0005`, 10 particles, and emission rate `0.5`.
+
+## T4 Decouple snapshot frequencies and checkpoints
+- Files changed:
+  - `list_of_functions.py`
+  - `maze_cluster_script.py`
+  - `resume_simulation.py`
+  - `video_maker_testrun.py`
+  - `scripts/make_jobs.py`
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - Added `--part-every` and `--conc-every`; concentration cadence must be a positive multiple of particle cadence.
+  - Checkpoints are stored in `ckpt_current.npz` and `ckpt_previous.npz`.
+  - Bundle keys include `conc`/`concentration`, `particles`, `theta`, `velocity`, `ang_velocity`, `masks`, `active_mask`, `dead_tracker`, `birth_times`, `exit_times`/`exit_trigger_time`, `step`/`resume_step`, `time`/`simulation_time`, `extra_state`, `dt`, `num_particles`, `file_prefix_conc`, `file_prefix_part`, `maze_config`, `static_source_position`, and `exit_radius`.
+  - Resume loads `ckpt_previous.npz`; the old `_checkpoint.txt` and `_state_checkpoint.npz` names are no longer used.
+- Behavior changes vs. before (esp. physics/RNG):
+  - Particle and concentration NPZ files now use separate global-step frequencies.
+  - Checkpoints are written at the end of every solver chunk and atomically promoted with `os.replace`.
+  - Chunk step/time are checkpointed at the end of the chunk, and NumPy/Python RNG states are stored in `extra_state` for resumed runs.
+  - Test runs always resolve to the `Testrun` startpoint profile, even if `--maze-config` also specifies another profile.
+  - Video rendering discovers numbered `param*.txt` snapshots or falls back to `ckpt_previous.npz` for startpoint coordinates.
+- How to test (exact command):
+  - `.venv/bin/python -m unittest tests.test_seed_regression`
+  - `python -m compileall -q maze_cluster_script.py list_of_functions.py resume_simulation.py video_maker_testrun.py scripts/make_jobs.py`
+- Known issues / TODO for later tasks:
+  - `extra_state` is the extension point for future tracker state. Preserve it as an object/dict, or add named keys to `write_param_snapshot` and restore them in `resume_simulation_from_file`.

@@ -32,7 +32,8 @@ class SimParams:
     dt: float
     gamma: float
     time_loop: int
-    write_every: int
+    part_every: int
+    conc_every: int
     num_particles: int
     param_filename: str
     grid_filename: str
@@ -91,7 +92,8 @@ class SimParams:
             "n_steps": self.n_steps,
             "dt": self.dt,
             "gamma": self.gamma,
-            "write_every": self.write_every,
+            "part_every": self.part_every,
+            "conc_every": self.conc_every,
             "num_particles": self.num_particles,
             "time_loop": self.time_loop,
             "birth_times": self.birth_times,
@@ -445,32 +447,91 @@ def write_parameters(**parameters):
     return numbered_filename
 
 
-def write_param_snapshot(parameters, simulation_time, resume_step):
+def write_param_snapshot(
+    parameters,
+    simulation_time,
+    resume_step,
+    concentration=None,
+    particles=None,
+    theta=None,
+    velocity=None,
+    ang_velocity=None,
+    extra_state=None,
+):
+    """Atomically write the current and previous checkpoint generations."""
     param_filename = parameters.get("param_filename", "parameters.txt")
-    state_filename = param_filename.removesuffix(".txt") + "_state.npz"
+    data_dir = os.path.dirname(param_filename) or "."
+    os.makedirs(data_dir, exist_ok=True)
+    current = os.path.join(data_dir, "ckpt_current.npz")
+    previous = os.path.join(data_dir, "ckpt_previous.npz")
+    temp = os.path.join(data_dir, f".ckpt_current.{os.getpid()}.tmp.npz")
 
-    if os.path.exists(param_filename):
-        shutil.copy2(param_filename, param_filename.removesuffix(".txt") + "_checkpoint.txt")
-    if os.path.exists(state_filename):
-        shutil.copy2(state_filename, state_filename.removesuffix(".npz") + "_checkpoint.npz")
+    if concentration is None:
+        concentration = np.empty((0,), dtype=np.float32)
+    if particles is None:
+        particles = np.empty((0,), dtype=np.float32)
+    if theta is None:
+        theta = np.empty((0,), dtype=np.float32)
+    if velocity is None:
+        velocity = np.empty((0, 2), dtype=np.float32)
+    if ang_velocity is None:
+        ang_velocity = np.empty((0,), dtype=np.float32)
 
-    np.savez_compressed(
-        state_filename,
-        birth_times=parameters["birth_times"],
-        active_mask=parameters["active_mask"],
-        dead_tracker=parameters["dead_tracker"],
-        exit_trigger_time=parameters["exit_trigger_time"],
-        resume_step=resume_step,
-        simulation_time=simulation_time,
-    )
+    active_mask = parameters["active_mask"]
+    dead_tracker = parameters["dead_tracker"]
+    masks = np.stack((active_mask, dead_tracker), axis=0)
 
-    with open(param_filename, "w") as f:
-        for key, value in parameters.items():
-            if key not in {"birth_times", "active_mask", "dead_tracker", "exit_trigger_time"}:
-                f.write(f"{key}: {value}\n")
-        f.write(f"state_filename: {state_filename}\n") # TODO make a checkpoint statefile persist if it has been used and mark it with globaltimestep? or sim_time?
-        f.write(f"simulation_time: {simulation_time}\n")
-        f.write(f"resume_step: {resume_step}\n")
+    extra_state = {} if extra_state is None else extra_state
+    if isinstance(extra_state, dict):
+        extra_state_array = np.empty((), dtype=object)
+        extra_state_array[()] = extra_state
+    else:
+        extra_state_array = extra_state
+
+    try:
+        with open(temp, "wb") as checkpoint_file:
+            np.savez(
+                checkpoint_file,
+                conc=concentration,
+                concentration=concentration,
+                particles=particles,
+                theta=theta,
+                velocity=velocity,
+                ang_velocity=ang_velocity,
+                masks=masks,
+                active_mask=active_mask,
+                dead_tracker=dead_tracker,
+                birth_times=parameters["birth_times"],
+                exit_times=parameters["exit_trigger_time"],
+                exit_trigger_time=parameters["exit_trigger_time"],
+                step=resume_step,
+                resume_step=resume_step,
+                time=simulation_time,
+                simulation_time=simulation_time,
+                extra_state=extra_state_array,
+                dt=float(parameters["dt"]),
+                num_particles=int(parameters["num_particles"]),
+                file_prefix_conc=str(parameters["file_prefix_conc"]),
+                file_prefix_part=str(parameters["file_prefix_part"]),
+                maze_config=str(parameters["maze_config"]),
+                static_source_position=np.asarray(parameters["static_source_position"], dtype=float),
+                exit_radius=float(parameters["exit_radius"]),
+            )
+            checkpoint_file.flush()
+            os.fsync(checkpoint_file.fileno())
+
+        if os.path.exists(current):
+            os.replace(current, previous)
+        else:
+            previous_temp = os.path.join(
+                data_dir, f".ckpt_previous.{os.getpid()}.tmp.npz"
+            )
+            shutil.copy2(temp, previous_temp)
+            os.replace(previous_temp, previous)
+        os.replace(temp, current)
+    finally:
+        if os.path.exists(temp):
+            os.remove(temp)
 
 
 def get_param_filename(data):
@@ -563,6 +624,54 @@ def save_snapshot(
     np.savez(f"{file_prefix_part}_{timestep}.npz", **data)
 
 
+def save_concentration_snapshot(
+    file_prefix_conc,
+    concentration,
+    timestep,
+    simulation_time,
+    n_steps,
+):
+    np.savez(
+        f"{file_prefix_conc}_{timestep}.npz",
+        timestep=timestep,
+        simulation_time=simulation_time,
+        concentration=concentration[timestep % n_steps],
+    )
+
+
+def save_particle_snapshot(
+    file_prefix_part,
+    particles,
+    theta,
+    velocity,
+    ang_velocity,
+    forces_self_propulsion,
+    forces_chemotaxis,
+    forces_interaction,
+    forces_wall,
+    timestep,
+    simulation_time,
+    save_forces=True,
+):
+    t = timestep % particles.shape[1]
+    data = {
+        "timestep": timestep,
+        "simulation_time": simulation_time,
+        "x": particles[:, t, 0],
+        "y": particles[:, t, 1],
+        "vx": velocity[:, t, 0],
+        "vy": velocity[:, t, 1],
+        "theta": theta[:, t],
+        "omega": ang_velocity[:, t],
+    }
+    if save_forces:
+        data["f_self_propulsion"] = forces_self_propulsion
+        data["f_chemotaxis"] = forces_chemotaxis
+        data["f_interaction"] = forces_interaction.sum(axis=1)
+        data["f_wall"] = forces_wall
+    np.savez(f"{file_prefix_part}_{timestep}.npz", **data)
+
+
 
 def chemical_solver(
     c,
@@ -598,7 +707,8 @@ def chemical_solver(
     dt = params.dt
     gamma = params.gamma
     time_loop = params.time_loop
-    write_every = params.write_every
+    part_every = params.part_every
+    conc_every = params.conc_every
     num_particles = params.num_particles
     param_filename = params.param_filename
     grid_filename = params.grid_filename
@@ -685,6 +795,14 @@ def chemical_solver(
 
         t = local_step
         t_next = local_step + 1  # goes from 1 to 49
+
+        # Solver calls are separate rolling-buffer loops. Recompute the bins
+        # from the particles' current positions before the spawn check.
+        px_bins[:] = 0
+        py_bins[:] = 0
+        finite_positions = np.isfinite(position[:, t, 0]) & np.isfinite(position[:, t, 1])
+        px_bins[finite_positions] = np.rint(position[finite_positions, t, 0] / dx).astype(int)
+        py_bins[finite_positions] = np.rint(position[finite_positions, t, 1] / dx).astype(int)
 
         spawning_queue = np.where(
             (birth_times <= simulation_time) & ~active_mask & ~dead_tracker
@@ -934,11 +1052,6 @@ def chemical_solver(
                     + bad_positions 
                 )
 
-                # clear the last param.txt as the param_checkpoint should be used
-                # in case the resume sim crashes immediately we dont want a param.txt to be left behind
-                # TODO is that still necessary with the param_checkpoint.txt implementation?
-                os.remove(param_filename) if os.path.exists(param_filename) else None
-
                 # Save the current state/output before terminating
                 save_snapshot(
                     file_prefix_conc,
@@ -957,19 +1070,10 @@ def chemical_solver(
                     n_steps,
                     save_forces=True,
                 )
-
-                # Mark currently active particles as exited/dead
-                exit_trigger_time[bad_particles] = simulation_time
-                dead_tracker[bad_particles] = True
-                active_mask[bad_particles] = False
-
-                finished = True
-                exit_timestep = timestep
-
-                # Save parameters so this run can be resumed/inspected
-                write_parameters(**params.to_parameter_dict())
-
-                break
+                raise RuntimeError(
+                    f"OUT-OF-BOUNDS ERROR at timestep {timestep}; "
+                    f"particle id(s): {bad_particles.tolist()}"
+                )
             ## ----------------------------------------------------------------------------
 
         # Write concentration and particle data
@@ -977,11 +1081,17 @@ def chemical_solver(
             write_parameters(**params.to_parameter_dict())
             write_grid(grid_filename, nx, ny)
 
-        if local_step % write_every == 0:
-            save_snapshot(
+        if timestep % conc_every == 0:
+            save_concentration_snapshot(
                 file_prefix_conc,
-                file_prefix_part,
                 c,
+                timestep,
+                simulation_time,
+                n_steps,
+            )
+        if timestep % part_every == 0:
+            save_particle_snapshot(
+                file_prefix_part,
                 position,
                 theta,
                 velocity,
@@ -992,7 +1102,6 @@ def chemical_solver(
                 forces_wall,
                 timestep,
                 simulation_time,
-                n_steps,
                 save_forces=True,
             )
 

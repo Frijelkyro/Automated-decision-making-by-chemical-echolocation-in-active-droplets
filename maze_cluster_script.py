@@ -34,7 +34,9 @@ parser.add_argument("--beta", type=float, default=-8)
 parser.add_argument("--emission-rate", type=float, default=0.5)
 parser.add_argument("--grim-reaper-delay", type=float, default=6.0)
 parser.add_argument("--desired-time", type=float, default=200)
-parser.add_argument("--write-every", type=int, default=100)
+parser.add_argument("--part-every", type=int)
+parser.add_argument("--conc-every", type=int)
+parser.add_argument("--write-every", type=int, help=argparse.SUPPRESS)
 parser.add_argument("--n-steps", type=int, default=100)
 parser.add_argument("--num-particles", type=int, default=60)
 parser.add_argument("--test-run", type=parse_bool, default=False)
@@ -60,7 +62,11 @@ if not config_path.is_absolute():
 try:
     with config_path.open("rb") as config_file:
         configurations = tomllib.load(config_file)["configurations"]
-    maze_config_name = args.maze_config or ("Testrun" if args.test_run else "Ran_maze_size_prop_to_droplet")
+    # Test runs always use the dedicated startpoint profile, regardless of
+    # experiment/job defaults that also happen to set --maze-config.
+    maze_config_name = "Testrun" if args.test_run else (
+        args.maze_config or "Ran_maze_size_prop_to_droplet"
+    )
     maze_config = configurations[maze_config_name]
     maze_file = Path(maze_config["maze_file"])
     if not maze_file.is_absolute():
@@ -122,7 +128,14 @@ gamma = (dc * dt) / (dx**2)  # gamma parameter
 simulation_time = 0.0  # physical time to start with TODO in seconds?
 # start_step = 0
 
-write_every = args.write_every  # write output after every this many time steps
+part_every = args.part_every or args.write_every or 100
+conc_every = args.conc_every or args.write_every or 100
+if part_every <= 0:
+    parser.error("--part-every must be positive")
+if conc_every <= 0:
+    parser.error("--conc-every must be positive")
+if conc_every % part_every != 0:
+    parser.error("--conc-every must be a multiple of --part-every")
 
 num_particles = args.num_particles  # Number of particles
 emission_rate = args.emission_rate  # droplets per second
@@ -153,7 +166,6 @@ permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 if test_run:
     n_steps = int(n_steps * 0.1 // 1)
-    write_every = 100
 
 # death zone and reaper timer
 death_zone_map = np.zeros_like(maze, dtype=bool)
@@ -204,13 +216,13 @@ resume_simulation = args.resume
 resume_step = 0  # this will be read from the last sim
 resume_old_dt = np.inf
 resume_new_dt = dt
+resumed_from_checkpoint = False
 
 if resume_simulation:
-    checkpoint_param = param_filename.removesuffix(".txt") + "_checkpoint.txt"
-    checkpoint_state = param_filename.removesuffix(".txt") + "_state_checkpoint.npz"
-    checkpoint_exists = (os.path.exists(checkpoint_param), os.path.exists(checkpoint_state))
+    checkpoint_previous = os.path.join(data, "ckpt_previous.npz")
+    checkpoint_exists = os.path.exists(checkpoint_previous)
 
-    if all(checkpoint_exists):
+    if checkpoint_exists:
         (
             conc,
             p,
@@ -230,6 +242,7 @@ if resume_simulation:
             maze,
             n_steps,
         )
+        resumed_from_checkpoint = True
 
         print(
             f"Resuming from timestep {resume_step} "
@@ -237,10 +250,6 @@ if resume_simulation:
         )
         if desired_time:
             time_loop = int(np.ceil((desired_time - simulation_time) / n_steps / dt))
-    elif any(checkpoint_exists):
-        raise FileNotFoundError(
-            f"Incomplete checkpoint for {data}: expected both checkpoint files"
-        )
     else:
         print(f"No checkpoint found in {data}; starting this shot from scratch.")
 
@@ -270,7 +279,8 @@ sim_params = SimParams(
     dt=dt,
     gamma=gamma,
     time_loop=time_loop,
-    write_every=write_every,
+    part_every=part_every,
+    conc_every=conc_every,
     num_particles=num_particles,
     param_filename=param_filename,
     grid_filename=grid_filename,
@@ -312,6 +322,7 @@ print(
 simulation_t0 = perf_counter()  # time tracking
 n_active = active_mask.sum()
 pbar = tqdm(range(time_loop), desc="Simulation", unit="loop")
+global_step = resume_step + 1 if resumed_from_checkpoint else 0
 
 # ---------------- Simulation loop ------------------
 for i in pbar:
@@ -325,7 +336,7 @@ for i in pbar:
         omega,
         maze,
         sim_params,
-        start_step=resume_step + i * n_steps,
+        start_step=global_step,
         start_time=simulation_time,
     )
     conc = solver_result.concentration
@@ -337,10 +348,31 @@ for i in pbar:
     exit_timestep = solver_result.exit_timestep
     finished = solver_result.finished
 
-    if not finished:
-        write_param_snapshot(parameter_dict, simulation_time, resume_step + i * n_steps)
+    end_step = global_step + n_steps - 1
+    end_time = simulation_time + (n_steps - 1) * dt
+    parameter_dict["active_mask"] = active_mask
+    parameter_dict["dead_tracker"] = dead_tracker
+    parameter_dict["exit_trigger_time"] = exit_trigger_time
+    parameter_dict["birth_times"] = birth_times
+    extra_state = {
+        "numpy_rng": np.random.get_state(),
+        "python_rng": random.getstate(),
+    }
+    write_param_snapshot(
+        parameter_dict,
+        end_time,
+        end_step,
+        concentration=conc[end_step % n_steps],
+        particles=p[:, end_step % n_steps, :],
+        theta=theta[:, end_step % n_steps],
+        velocity=v[:, end_step % n_steps, :],
+        ang_velocity=omega[:, end_step % n_steps],
+        extra_state=extra_state,
+    )
 
-    simulation_time += (n_steps - 1) * dt
+    global_step += n_steps - 1
+    global_step += 1
+    simulation_time = end_time
 
     if finished:
         conc[-1, :, :] = conc[exit_timestep % n_steps, :, :]
@@ -360,7 +392,7 @@ for i in pbar:
     # time tracking
     n_active = active_mask.sum()
     pbar.set_postfix(
-        timestep= resume_step +(i + 1) * n_steps,
+        timestep=end_step,
         active=n_active,
         simulation_time=f"{simulation_time:.0f}s",
     )

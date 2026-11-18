@@ -15,6 +15,8 @@ PARAMETER_FLAGS = {
     "emission_rate": "--emission-rate",
     "grim_reaper_delay": "--grim-reaper-delay",
     "desired_time": "--desired-time",
+    "part_every": "--part-every",
+    "conc_every": "--conc-every",
     "write_every": "--write-every",
     "n_steps": "--n-steps",
     "num_particles": "--num-particles",

@@ -25,21 +25,39 @@ DATA = args.data
 MAZE = args.maze
 PARAM = os.path.join(DATA, "param.txt")
 if not os.path.isfile(PARAM):
-    PARAM = PARAM.removesuffix(".txt") + "_checkpoint.txt"
+    numbered_params = []
+    for path in glob.glob(os.path.join(DATA, "param*.txt")):
+        match = re.fullmatch(r"param(\d+)\.txt", os.path.basename(path))
+        if match:
+            numbered_params.append((int(match.group(1)), path))
+    if numbered_params:
+        PARAM = max(numbered_params)[1]
 GRID = os.path.join(DATA, "grid.txt")
 SHOW_TRAJECTORIES = False
 
 # Parameters
 params = {}
-with open(PARAM) as f:
-    for line in f:
-        if ":" not in line:
-            continue
-        k, v = map(str.strip, line.split(":", 1))
-        try:
-            params[k] = ast.literal_eval(v)
-        except (ValueError, SyntaxError):
-            params[k] = v
+if os.path.isfile(PARAM):
+    with open(PARAM) as f:
+        for line in f:
+            if ":" not in line:
+                continue
+            k, v = map(str.strip, line.split(":", 1))
+            try:
+                params[k] = ast.literal_eval(v)
+            except (ValueError, SyntaxError):
+                params[k] = v
+else:
+    checkpoint = os.path.join(DATA, "ckpt_previous.npz")
+    if not os.path.isfile(checkpoint):
+        raise RuntimeError(
+            "No parameter text file or ckpt_previous.npz found."
+        )
+    with np.load(checkpoint, allow_pickle=True) as data:
+        params["static_source_position"] = tuple(
+            data["static_source_position"].tolist()
+        )
+        params["exit_radius"] = float(data["exit_radius"])
 
 # Grid / maze
 with open(GRID) as f:
@@ -110,8 +128,10 @@ with np.load(part_files[0]) as d:
 npart = len(x0)
 
 first_conc = None
-if timestamps[0] in conc_files:
-    with np.load(conc_files[timestamps[0]]) as d:
+earlier_conc_steps = [ts for ts in conc_files if ts <= timestamps[0]]
+if earlier_conc_steps:
+    first_conc_step = max(earlier_conc_steps)
+    with np.load(conc_files[first_conc_step]) as d:
         first_conc = d["concentration"]
 
 # Figure
@@ -216,8 +236,10 @@ def update(i):
     )
 
     # Concentration
-    if ts in conc_files:
-        with np.load(conc_files[ts]) as d:
+    earlier_conc_steps = [conc_ts for conc_ts in conc_files if conc_ts <= ts]
+    if earlier_conc_steps:
+        conc_ts = max(earlier_conc_steps)
+        with np.load(conc_files[conc_ts]) as d:
             image.set_data(d["concentration"].T)
 
     # Trajectories

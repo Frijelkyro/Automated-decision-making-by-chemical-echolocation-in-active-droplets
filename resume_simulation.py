@@ -1,5 +1,6 @@
 import ast
 import os
+import random
 import numpy as np
 
 
@@ -48,28 +49,45 @@ def _read_particles(filename, num_particles, n_steps):
 
 
 def resume_simulation_from_file(data, param_filename, maze, n_steps):
-    state_filename = param_filename.removesuffix(".txt") + "_state_checkpoint.npz"
-    param_filename = param_filename.removesuffix(".txt") + "_checkpoint.txt"
+    checkpoint_filename = os.path.join(data, "ckpt_previous.npz")
+    if not os.path.exists(checkpoint_filename):
+        raise FileNotFoundError(
+            f"Checkpoint bundle not found: {checkpoint_filename}"
+        )
+    print(f"Using recovery checkpoint bundle: {checkpoint_filename}")
 
-    if not os.path.exists(param_filename):
-        raise FileNotFoundError(f"Checkpoint parameters not found: {param_filename}")
-    if not os.path.exists(state_filename):
-        raise FileNotFoundError(f"Checkpoint state not found: {state_filename}")
-    print(f"Using recovery parameter file: {param_filename}")
-
-    old = _read_parameter_file(param_filename)
-
-    with np.load(state_filename) as state:
-        birth_times = state["birth_times"]
-        active_mask = state["active_mask"]
-        dead_tracker = state["dead_tracker"]
-        exit_trigger_time = state["exit_trigger_time"]
-        resume_step = int(state["resume_step"])
-        resume_time = float(state["simulation_time"])
-
-    num_particles = int(old["num_particles"])
-    conc_prefix = os.path.join(data, os.path.basename(old["file_prefix_conc"]))
-    part_prefix = os.path.join(data, os.path.basename(old["file_prefix_part"]))
+    with np.load(checkpoint_filename, allow_pickle=True) as state:
+        birth_times = state["birth_times"].copy()
+        active_mask = state["active_mask"].copy()
+        dead_tracker = state["dead_tracker"].copy()
+        exit_trigger_time = state["exit_trigger_time"].copy()
+        resume_step = int(state["step"] if "step" in state else state["resume_step"])
+        resume_time = float(state["time"] if "time" in state else state["simulation_time"])
+        num_particles = int(state["num_particles"]) if "num_particles" in state else int(
+            _read_parameter_file(param_filename)["num_particles"]
+        )
+        dt = float(state["dt"]) if "dt" in state else float(
+            _read_parameter_file(param_filename)["dt"]
+        )
+        conc_prefix = os.path.join(
+            data,
+            os.path.basename(str(state["file_prefix_conc"])) if "file_prefix_conc" in state else "conc",
+        )
+        part_prefix = os.path.join(
+            data,
+            os.path.basename(str(state["file_prefix_part"])) if "file_prefix_part" in state else "part",
+        )
+        if "concentration" in state:
+            concentration = state["concentration"].copy()
+        elif "conc" in state:
+            concentration = state["conc"].copy()
+        else:
+            concentration = None
+        particles = state["particles"].copy() if "particles" in state else None
+        theta = state["theta"].copy() if "theta" in state else None
+        velocity = state["velocity"].copy() if "velocity" in state else None
+        ang_velocity = state["ang_velocity"].copy() if "ang_velocity" in state else None
+        extra_state = state["extra_state"].item() if "extra_state" in state else {}
 
     for prefix in (conc_prefix, part_prefix):
         prefix = os.path.basename(prefix)
@@ -79,18 +97,39 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
                 if step > resume_step:
                     os.remove(os.path.join(data, filename))
 
-    conc = _read_concentration(
-        f"{conc_prefix}_{resume_step}.npz",
-        n_steps,
-    )
+    if concentration is None:
+        conc = _read_concentration(f"{conc_prefix}_{resume_step}.npz", n_steps)
+    else:
+        conc = np.zeros((n_steps, *concentration.shape), dtype=concentration.dtype)
+        conc[0] = concentration
 
-    p, theta, v, omega = _read_particles(
-        f"{part_prefix}_{resume_step}.npz",
-        num_particles,
-        n_steps,
-    )
-    print(f"using particle file: {part_prefix}_{resume_step}.npz")
-    print(f"using conc file: {conc_prefix}_{resume_step}.npz")
+    if particles is None:
+        p, theta, v, omega = _read_particles(
+            f"{part_prefix}_{resume_step}.npz",
+            num_particles,
+            n_steps,
+        )
+    else:
+        p = np.zeros((num_particles, n_steps, 2), dtype=particles.dtype)
+        v = np.zeros((num_particles, n_steps, 2), dtype=velocity.dtype)
+        theta_out = np.zeros((num_particles, n_steps), dtype=theta.dtype)
+        omega = np.zeros((num_particles, n_steps), dtype=ang_velocity.dtype)
+        p[:, 0] = particles
+        v[:, 0] = velocity
+        theta_out[:, 0] = theta
+        omega[:, 0] = ang_velocity
+        theta = theta_out
+
+    if isinstance(extra_state, dict):
+        numpy_state = extra_state.get("numpy_rng")
+        python_state = extra_state.get("python_rng")
+        if numpy_state is not None:
+            np.random.set_state(numpy_state)
+        if python_state is not None:
+            random.setstate(python_state)
+
+    print(f"using particle checkpoint bundle at step {resume_step}")
+    print(f"using concentration checkpoint bundle at step {resume_step}")
 
     return (
         conc,
@@ -104,5 +143,5 @@ def resume_simulation_from_file(data, param_filename, maze, n_steps):
         birth_times,
         resume_step,
         resume_time,
-        float(old["dt"]),
+        dt,
     )

@@ -43,6 +43,7 @@ def main():
             command.append("--resume-failed")
         elif args.resume:
             command.append("--resume")
+    command.append("--halt-on-error=2")
 
     with jobfile.open() as job_input:
         subprocess.run(command, stdin=job_input, cwd=ROOT, check=True)
