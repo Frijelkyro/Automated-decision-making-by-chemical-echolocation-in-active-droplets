@@ -243,3 +243,22 @@
   - `.venv/bin/python scripts/view_decisions.py <shot-output-directory> --head 20`
 - Known issues / TODO for later tasks:
   - The viewer prints the first N rows from each `decisions_*.npz`; use `--head 0` to print only filenames.
+
+## T8 Resume compatibility for the tracker
+- Files changed:
+  - `junction_tracking.py`
+  - `maze_cluster_script.py`
+  - `tests/test_junction_tracker_resume.py`
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - `JunctionTracker.get_state(checkpoint_step=None)` adds `flushed_upto_step` and `checkpoint_step` to the junction-tracker dictionary stored under `extra_state["junction_tracker"]`.
+  - Restored state includes `armed`, `event_buffer`, `flush_count`, `flushed_upto_step`, and the checkpoint step.
+  - Added `truncate_decision_log_files(output_dir, checkpoint_step)` for post-resume decision-log cleanup.
+- Behavior changes vs. before (esp. physics/RNG):
+  - On resume, tracker state and pending events are restored and pending events after the checkpoint step are discarded.
+  - Flushed decision NPZ files beginning after the checkpoint step are deleted; straddling files are rewritten without events after the checkpoint step.
+  - No RNG or physics behavior changes.
+- How to test (exact command):
+  - `.venv/bin/python -m unittest tests.test_junction_tracker_resume`
+- Known issues / TODO for later tasks:
+  - None.

@@ -12,7 +12,7 @@ from list_of_functions import (
     SimParams,
     write_param_snapshot,
 )
-from junction_tracking import JunctionTracker
+from junction_tracking import JunctionTracker, truncate_decision_log_files
 
 from time import perf_counter
 from tqdm import tqdm
@@ -275,7 +275,7 @@ if args.track_decisions:
         maze.shape[1],
         dx=dx,
     )
-    if os.path.exists(os.path.join(data, "ckpt_previous.npz")):
+    if resumed_from_checkpoint:
         try:
             with np.load(os.path.join(data, "ckpt_previous.npz"), allow_pickle=True) as state:
                 if "extra_state" in state:
@@ -284,6 +284,7 @@ if args.track_decisions:
                         junction_tracker.restore_state(extra_state.get("junction_tracker"))
         except (OSError, ValueError):
             parser.error("Unable to restore junction tracker state from ckpt_previous.npz")
+        truncate_decision_log_files(output_dir, resume_step)
 
 # Build one parameter source and serialize its legacy parameter-file keys from it.
 sim_params = SimParams(
@@ -405,7 +406,7 @@ for i in pbar:
         "python_rng": random.getstate(),
     }
     if junction_tracker is not None:
-        extra_state["junction_tracker"] = junction_tracker.get_state()
+        extra_state["junction_tracker"] = junction_tracker.get_state(end_step)
     write_param_snapshot(
         parameter_dict,
         end_time,

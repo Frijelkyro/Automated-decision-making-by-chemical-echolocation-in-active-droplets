@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import numpy as np
@@ -58,6 +59,7 @@ class JunctionTracker:
         self.event_buffer = []
         self.dx = float(dx)
         self.flush_count = 0
+        self.flushed_upto_step = -1
 
     @property
     def events(self):
@@ -152,14 +154,23 @@ class JunctionTracker:
             correct=correct,
             shape=np.asarray(self.before.shape[1:], dtype=np.int64),
         )
+        if global_step.size:
+            self.flushed_upto_step = max(
+                int(self.flushed_upto_step),
+                int(global_step.max()),
+            )
         self.event_buffer.clear()
         return output_dir / f"{name}.npz"
 
-    def get_state(self):
+    def get_state(self, checkpoint_step=None):
         return {
             "armed": self.armed.copy(),
             "event_buffer": list(self.event_buffer),
             "flush_count": int(self.flush_count),
+            "flushed_upto_step": int(self.flushed_upto_step),
+            "checkpoint_step": (
+                None if checkpoint_step is None else int(checkpoint_step)
+            ),
         }
 
     def restore_state(self, state):
@@ -175,3 +186,60 @@ class JunctionTracker:
             self.event_buffer = list(events)
         if "flush_count" in state:
             self.flush_count = int(state["flush_count"])
+        if "flushed_upto_step" in state:
+            self.flushed_upto_step = int(state["flushed_upto_step"])
+        checkpoint_step = state.get("checkpoint_step")
+        if checkpoint_step is not None:
+            checkpoint_step = int(checkpoint_step)
+            self.event_buffer = [
+                event for event in self.event_buffer
+                if int(event[0]) <= checkpoint_step
+            ]
+            if self.flushed_upto_step > checkpoint_step:
+                self.flushed_upto_step = checkpoint_step
+
+
+def truncate_decision_log_files(output_dir, checkpoint_step):
+    """Remove decisions that were not yet valid at a recovery checkpoint."""
+    output_dir = Path(output_dir)
+    if not output_dir.exists():
+        return
+
+    checkpoint_step = int(checkpoint_step)
+    for decision_file in sorted(output_dir.glob("decisions_*.npz")):
+        try:
+            with np.load(decision_file, allow_pickle=False) as data:
+                if "global_step" in data:
+                    global_step = data["global_step"].astype(np.int64)
+                elif "global_steps" in data:
+                    global_step = data["global_steps"].astype(np.int64)
+                else:
+                    continue
+
+                if global_step.size == 0:
+                    continue
+                if int(global_step.min()) > checkpoint_step:
+                    decision_file.unlink()
+                    continue
+                if int(global_step.max()) <= checkpoint_step:
+                    continue
+
+                keep = global_step <= checkpoint_step
+                saved = {}
+                for key in data.files:
+                    array = data[key].copy()
+                    if array.ndim > 0 and array.shape[0] == global_step.size:
+                        array = array[keep]
+                    saved[key] = array
+        except (OSError, ValueError):
+            continue
+
+        temp = decision_file.with_name(
+            f".{decision_file.name}.{os.getpid()}.tmp.npz"
+        )
+        try:
+            np.savez_compressed(temp, **saved)
+            temp.replace(decision_file)
+        finally:
+            if temp.exists():
+                temp.unlink()
