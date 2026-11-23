@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import re
 import subprocess
 import sys
 import tomllib
@@ -61,6 +62,18 @@ def resolve_maze(config: dict, maze_override: Path | None) -> Path:
             maze = PROJECT_ROOT / maze
         return maze.resolve()
     return DEFAULT_MAZE.resolve()
+
+
+def has_parameter_file(shot_dir: Path) -> bool:
+    if any(
+        (shot_dir / name).is_file()
+        for name in ("param.txt", "param_checkpoint.txt")
+    ):
+        return True
+    return any(
+        path.is_file() and re.fullmatch(r"param\d+\.txt", path.name)
+        for path in shot_dir.glob("param*.txt")
+    )
 
 
 def main() -> int:
@@ -171,23 +184,12 @@ def main() -> int:
                 particle_files = list(shot_dir.glob("part_*.npz"))
                 concentration_files = list(shot_dir.glob("conc_*.npz"))
 
-                required_files = [
-                    "grid.txt",
-                ]
-                if not (
-                    (shot_dir / "param.txt").is_file()
-                    or (shot_dir / "param_checkpoint.txt").is_file()
-                ):
-                    required_files.append("param.txt or param_checkpoint.txt")
-
-                missing = [
-                    name for name in required_files
-                    if name == "grid.txt" and not (shot_dir / name).is_file()
-                ]
-                has_params = (
-                    (shot_dir / "param.txt").is_file()
-                    or (shot_dir / "param_checkpoint.txt").is_file()
-                )
+                missing = []
+                if not (shot_dir / "grid.txt").is_file():
+                    missing.append("grid.txt")
+                has_params = has_parameter_file(shot_dir)
+                if not has_params:
+                    missing.append("param*.txt")
 
                 if not particle_files or not concentration_files or not has_params or missing:
                     report(
