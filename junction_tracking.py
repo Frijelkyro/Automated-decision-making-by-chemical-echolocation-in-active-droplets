@@ -179,8 +179,12 @@ class JunctionTracker:
         armed = state.get("armed")
         if armed is not None:
             armed = np.asarray(armed, dtype=bool)
-            if armed.shape == self.armed.shape:
-                self.armed[:] = armed
+            if (
+                armed.ndim == 2
+                and armed.shape[1] == self.armed.shape[1]
+                and armed.shape[0] <= self.armed.shape[0]
+            ):
+                self.armed[:armed.shape[0]] = armed
         events = state.get("event_buffer")
         if events is not None:
             self.event_buffer = list(events)

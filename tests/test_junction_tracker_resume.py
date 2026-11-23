@@ -148,6 +148,69 @@ class JunctionTrackerResumeTest(unittest.TestCase):
             resumed_log = self._read_decision_log(resume_dir)
             self.assertEqual(resumed_log, straight_log)
 
+    def test_resume_extends_particle_state_when_desired_time_increases(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            zones_file = temp_path / "zones.npz"
+            np.savez(
+                zones_file,
+                junction_ids=np.asarray(["J0"]),
+                J0_before=np.zeros((99, 110), dtype=bool),
+                J0_correct=np.zeros((99, 110), dtype=bool),
+                J0_wrong=np.zeros((99, 110), dtype=bool),
+            )
+            shot_dir = temp_path / "shot"
+            shot_dir.mkdir()
+            common = [
+                str(PYTHON),
+                str(ROOT / "maze_cluster_script.py"),
+                "--seed",
+                "41",
+                "--dt",
+                "0.001",
+                "--n-steps",
+                "10",
+                "--emission-rate",
+                "100",
+                "--beta",
+                "0",
+                "--maze-config",
+                "Ran_maze_size_prop_to_droplet",
+                "--track-decisions",
+                "--zones-file",
+                str(zones_file),
+                "--data-dir",
+                str(shot_dir),
+                "--output-dir",
+                str(shot_dir),
+            ]
+
+            first = subprocess.run(
+                common + ["--desired-time", "0.01"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(first.returncode, 0, first.stderr)
+            with np.load(shot_dir / "ckpt_current.npz", allow_pickle=True) as data:
+                self.assertEqual(data["particles"].shape[0], 1)
+
+            resumed = subprocess.run(
+                common + ["--desired-time", "0.02", "--resume", "true"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(resumed.returncode, 0, resumed.stderr)
+            self.assertIn("Resuming from timestep", resumed.stdout)
+            with np.load(shot_dir / "ckpt_current.npz", allow_pickle=True) as data:
+                self.assertEqual(data["particles"].shape[0], 2)
+                self.assertGreaterEqual(float(data["simulation_time"]), 0.02)
+                tracker_state = data["extra_state"].item()["junction_tracker"]
+                self.assertEqual(tracker_state["armed"].shape, (2, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

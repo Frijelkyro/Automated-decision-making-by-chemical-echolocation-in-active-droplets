@@ -86,7 +86,7 @@ Launch generated jobs with GNU Parallel:
 python scripts/run_parallel.py --jobs 3
 ```
 
-When `resume_simulation = true`, rerunning a series with the same name resumes its job log and unfinished shots from checkpoints. Keep the configuration unchanged while resuming; use a new series name for changed parameters.
+To extend or continue an experiment, set `resume_simulation = true` in its TOML and run `scripts/run_parallel.py` again, or pass `--resume` to force checkpoint resume for every configured shot. Checkpoint-resume dispatch runs every shot command again under a fresh GNU Parallel job log; GNU Parallel must not skip successful entries because the simulations themselves decide what work remains. Each shot resumes from `ckpt_previous.npz`, and completed shots will do no further solver loops if their checkpoint already meets the requested duration. Increasing `desired_time` is supported, including the additional particles implied by a longer duration. Keep the other physics and maze settings unchanged while resuming; use a new series name and output directories for different settings.
 
 ## Maze and zone configuration
 

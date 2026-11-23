@@ -1,10 +1,14 @@
 import argparse
 import shutil
 import subprocess
+import time
 import tomllib
 from pathlib import Path
 
-from make_jobs import generate_jobs
+if __package__:
+    from .make_jobs import generate_jobs
+else:
+    from make_jobs import generate_jobs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +23,11 @@ def main():
     )
     parser.add_argument("--jobs", type=int, default=3)
     parser.add_argument("--progress", "--bar", action="store_true", help="Show GNU Parallel's compact progress bar.")
-    parser.add_argument("--resume", action="store_true", help="Resume using the existing GNU Parallel job log.")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume every shot from its checkpoint instead of skipping completed job-log entries.",
+    )
     args = parser.parse_args()
 
     parallel = shutil.which("parallel")
@@ -32,17 +40,23 @@ def main():
     with config_path.open("rb") as config_file:
         config = tomllib.load(config_file)
 
-    jobs, jobfile = generate_jobs(config_path)
-    joblog = jobfile.with_name("joblog")
+    resume_in_config = config.get("defaults", {}).get("resume_simulation", False) or any(
+        True in regime.get("grid", {}).get("resume_simulation", [])
+        for regime in config.get("regimes", [])
+    )
+    resume_checkpoints = args.resume or resume_in_config
+    jobs, jobfile = generate_jobs(
+        config_path,
+        resume_override=True if args.resume else None,
+    )
+    joblog = jobfile.with_name(
+        f"joblog-checkpoint-resume-{time.time_ns()}"
+        if resume_checkpoints
+        else "joblog"
+    )
     command = [parallel, "-j", str(args.jobs), "--joblog", str(joblog)]
     if args.progress:
         command.append("--bar")
-    resume_simulation = config.get("defaults", {}).get("resume_simulation", False)
-    if joblog.exists():
-        if resume_simulation:
-            command.append("--resume-failed")
-        elif args.resume:
-            command.append("--resume")
     command.append("--halt-on-error=2")
 
     with jobfile.open() as job_input:

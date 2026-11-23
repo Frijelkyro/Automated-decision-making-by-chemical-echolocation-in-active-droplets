@@ -173,6 +173,10 @@ permeability = 0.0  # permeability of the exit wall (0 = no-flux, >0 = leaky)
 
 if test_run:
     n_steps = int(n_steps * 0.1 // 1)
+elif desired_time:
+    if n_steps < 2:
+        parser.error("--n-steps must be at least 2 for a full simulation")
+    time_loop = int(np.ceil(desired_time / ((n_steps - 1) * dt)))
 
 # death zone and reaper timer
 death_zone_map = np.zeros_like(maze, dtype=bool)
@@ -216,6 +220,14 @@ birth_times = np.array(
     [i / emission_rate for i in range(num_particles)],
     dtype=np.float64,
 )
+initial_particles = p
+initial_theta = theta
+initial_velocity = v
+initial_ang_velocity = omega
+initial_active_mask = active_mask
+initial_dead_tracker = dead_tracker
+initial_exit_trigger_time = exit_trigger_time
+initial_birth_times = birth_times
 
 # Resume settings
 resume_simulation = args.resume
@@ -249,6 +261,37 @@ if resume_simulation:
             maze,
             n_steps,
         )
+        checkpoint_num_particles = len(active_mask)
+        if checkpoint_num_particles < num_particles:
+            p = np.concatenate(
+                (p, initial_particles[checkpoint_num_particles:]), axis=0
+            )
+            theta = np.concatenate(
+                (theta, initial_theta[checkpoint_num_particles:]), axis=0
+            )
+            v = np.concatenate(
+                (v, initial_velocity[checkpoint_num_particles:]), axis=0
+            )
+            omega = np.concatenate(
+                (omega, initial_ang_velocity[checkpoint_num_particles:]), axis=0
+            )
+            active_mask = np.concatenate(
+                (active_mask, initial_active_mask[checkpoint_num_particles:])
+            )
+            dead_tracker = np.concatenate(
+                (dead_tracker, initial_dead_tracker[checkpoint_num_particles:])
+            )
+            exit_trigger_time = np.concatenate(
+                (
+                    exit_trigger_time,
+                    initial_exit_trigger_time[checkpoint_num_particles:],
+                )
+            )
+            birth_times = np.concatenate(
+                (birth_times, initial_birth_times[checkpoint_num_particles:])
+            )
+        else:
+            num_particles = checkpoint_num_particles
         resumed_from_checkpoint = True
 
         print(
@@ -256,7 +299,14 @@ if resume_simulation:
             f"(t: {simulation_time:.6f} s, old dt: {resume_old_dt}, new dt: {dt})"
         )
         if desired_time:
-            time_loop = int(np.ceil((desired_time - simulation_time) / n_steps / dt))
+            chunk_duration = (
+                n_steps * dt
+                if test_run
+                else (n_steps - 1) * dt
+            )
+            time_loop = int(
+                np.ceil((desired_time - simulation_time) / chunk_duration)
+            )
     else:
         print(f"No checkpoint found in {data}; starting this shot from scratch.")
 

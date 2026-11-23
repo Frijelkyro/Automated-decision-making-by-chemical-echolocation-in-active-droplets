@@ -33,7 +33,7 @@ def _value_text(value):
     return str(value).lower() if isinstance(value, bool) else str(value)
 
 
-def generate_jobs(config_path):
+def generate_jobs(config_path, resume_override=None):
     config_path = Path(config_path)
     if not config_path.is_absolute():
         config_path = ROOT / config_path
@@ -56,6 +56,8 @@ def generate_jobs(config_path):
         keys = list(grid)
         for config_index, values in enumerate(itertools.product(*(grid[key] for key in keys))):
             parameters = defaults | dict(zip(keys, values))
+            if resume_override is not None:
+                parameters["resume_simulation"] = resume_override
             unknown = parameters.keys() - PARAMETER_FLAGS.keys()
             if unknown:
                 raise ValueError(f"Unsupported simulation parameter(s): {', '.join(sorted(unknown))}")
