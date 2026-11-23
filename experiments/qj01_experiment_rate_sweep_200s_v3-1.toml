@@ -1,0 +1,26 @@
+[series]
+name = "qj01_experiment_rate_sweep_200s_v3-1"
+data_root = "data"
+output_root = "output"
+
+[defaults]
+maze_config = "QJ01_config0"
+desired_time = 200
+dt = 0.0005
+beta = -8
+grim_reaper_delay = 1.0
+part_every = 100
+conc_every = 100
+n_steps = 100
+test_run = false
+resume_simulation = false
+# Writes decisions_<n>.npz files into each shot's output directory.
+track_decisions = true
+zones_file = "different_mazes/QJ01_analysis/zone_masks.npz"
+
+[[regimes]]
+name = "qj01_rates"
+shots = 4
+
+[regimes.grid]
+emission_rate = [0.05, 0.02, 0.01, 0.1]
