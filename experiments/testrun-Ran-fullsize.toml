@@ -1,0 +1,26 @@
+[series]
+name = "testrun-ran-fullsize"
+data_root = "data"
+output_root = "output"
+
+[defaults]
+maze_config = "Ran_maze_size_prop_to_droplet"
+dt = 0.0005
+beta = -8
+grim_reaper_delay = 1.0
+desired_time = 20
+part_every = 100
+conc_every = 100
+n_steps = 10
+test_run = false
+resume_simulation = false
+zones_file = "different_mazes/Ran_maze_size_prop_to_droplet_analysis/zone_masks.npz"
+track_decisions = true
+
+
+[[regimes]]
+name = "testrun"
+shots = 2
+
+[regimes.grid]
+emission_rate = [1.0]

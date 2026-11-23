@@ -262,3 +262,17 @@
   - `.venv/bin/python -m unittest tests.test_junction_tracker_resume`
 - Known issues / TODO for later tasks:
   - None.
+
+## T9 Efficiency check (and fallback only if needed)
+- Files changed:
+  - `HANDOFF.md`
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - None.
+- Behavior changes vs. before (esp. physics/RNG):
+  - No change needed: the tracker fallback was not added because its measured cost is below the 5% threshold.
+  - Profile at 40 particles, 20 junctions, and a 100x100 grid (7 rounds, 200 calls/round, median): tracker 71.743 us/step; `interaction_force` 7630.327 us/step; `wall_force` 44241.058 us/step.
+  - Tracker cost relative to `interaction_force`: 0.94%; relative to `wall_force`: 0.16%.
+- How to test (exact command):
+  - `python -m compileall -q junction_tracking.py list_of_functions.py`
+- Known issues / TODO for later tasks:
+  - None. The tracker remained inactive for the benchmark logic and no heading/chemical-force fallback logging was implemented.

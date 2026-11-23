@@ -2,7 +2,7 @@
 # This file is retained only for reference.
 
 [J01]
-before = 4
+before = 7
 correct = 7
 wrong = 7
 center = [33, 16]

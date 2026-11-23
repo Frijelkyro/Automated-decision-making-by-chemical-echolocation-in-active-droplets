@@ -7,7 +7,7 @@
 # Example overrides in [junctions.J01]: correct_distance = 5, wrong_radius = 2.5, drop = true.
 # maze_metadata.toml is generated summary output and is not read as zone configuration.
 [defaults]
-before_distance = 4
+before_distance = 7
 correct_distance = 7
 wrong_distance = 7
 before_radius = 3.5

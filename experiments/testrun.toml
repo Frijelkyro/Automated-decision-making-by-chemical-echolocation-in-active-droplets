@@ -1,0 +1,26 @@
+[series]
+name = "testrun"
+data_root = "data"
+output_root = "output"
+
+[defaults]
+maze_config = "Testrun"
+dt = 0.0005
+beta = -8
+grim_reaper_delay = 1.0
+desired_time = 20
+write_every = 100
+part_every = 100
+conc_every = 100
+track_decisions = true
+zones_file = "different_mazes/Ran_maze_size_prop_to_droplet_testrun_analysis/zone_masks.npz"
+n_steps = 10
+test_run = false
+resume_simulation = false
+
+[[regimes]]
+name = "testrun"
+shots = 3
+
+[regimes.grid]
+emission_rate = [1.0]

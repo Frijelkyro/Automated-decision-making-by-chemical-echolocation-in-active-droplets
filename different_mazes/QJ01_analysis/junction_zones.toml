@@ -7,7 +7,7 @@
 # Junctions with any explicit overrides: none
 # Individual radius overrides: none
 [defaults]
-before_distance = 4
+before_distance = 7
 correct_distance = 7
 wrong_distance = 7
 before_radius = 4.0
