@@ -276,3 +276,21 @@
   - `python -m compileall -q junction_tracking.py list_of_functions.py`
 - Known issues / TODO for later tasks:
   - None. The tracker remained inactive for the benchmark logic and no heading/chemical-force fallback logging was implemented.
+
+## T10 Docs and final validation
+- Files changed:
+  - `README.md`: updated run, output, checkpoint, decision-log, zone-TOML, video, and dependency documentation.
+  - `requirements.txt`: removed unused `seaborn`; retained `scipy` and `scikit-image`.
+  - `HANDOFF.md`: appended this validation record.
+- New/changed interfaces (signatures, file formats, CLI flags):
+  - Documentation now records `--seed`, `--part-every`, `--conc-every`, `--resume`, `--maze-config`, `--track-decisions`, `--zones-file`, and `--decision-flush-loops`.
+  - Documentation now records compact/free-cell `.npz` concentration snapshots, checkpoint bundles, and decision NPZ logs.
+- Behavior changes vs. before (esp. physics/RNG):
+  - Documentation only; no simulation physics or RNG code changed.
+- How to test (exact command):
+  - `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  - `.venv/bin/python -m unittest tests.test_junction_tracker_resume`
+  - `.venv/bin/python maze_cluster_script.py --seed 12345 --test-run true --desired-time 20 --dt 0.0005 --n-steps 100 --num-particles 10 --emission-rate 0.5 --data-dir <data-dir> --output-dir <output-dir>`
+- Known issues / TODO for later tasks:
+  - Full discovery ran 20 tests: 16 passed, with 2 failures and 2 errors. Existing blockers are a stale fixed-seed `exit_times.txt` baseline (first particle differs), stale QJ01 profile expectations, a metadata test that passes a nonexistent `maze.tsv`, and an import for a removed snapshot-retention helper.
+  - The junction-tracker resume test passes, including straight-vs-resumed decision-log equality.
