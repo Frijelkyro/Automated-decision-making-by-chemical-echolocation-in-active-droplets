@@ -1,3 +1,4 @@
+import zlib
 import argparse
 import os
 import random
@@ -57,8 +58,11 @@ parser.add_argument("--track-decisions", action="store_true", default=False)
 parser.add_argument("--zones-file", type=Path)
 parser.add_argument("--decision-flush-loops", type=int, default=100)
 args = parser.parse_args()
-np.random.seed(args.seed)
-random.seed(args.seed)
+effective_seed = int(np.random.SeedSequence(
+    [args.seed, args.shot, zlib.crc32(args.run_id.encode())]
+).generate_state(1)[0])
+np.random.seed(effective_seed)
+random.seed(effective_seed)
 
 config_path = args.startpoints_config.expanduser()
 if not config_path.is_absolute():
@@ -391,7 +395,7 @@ sim_params = SimParams(
     emitter_jitter=tuple(emitter_jitter),
     run_id=args.run_id,
     shot=args.shot,
-    seed=args.seed,
+    seed=effective_seed,
     junction_tracker=junction_tracker,
     decision_output_dir=output_dir,
     decision_flush_loops=args.decision_flush_loops,
