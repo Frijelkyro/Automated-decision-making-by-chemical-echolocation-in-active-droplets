@@ -1,0 +1,623 @@
+#!/usr/bin/env python3
+"""Evaluate particle junction decisions across one experiment series.
+
+Place in ``scripts/`` next to ``run_parallel.py`` / ``make_jobs.py``.
+
+What it does
+------------
+1. Expands the series TOML exactly like ``make_jobs.generate_jobs`` does
+   (regimes x grid x shots) to learn which shots *should* exist and where
+   their ``decisions_*.npz`` chunks live
+   (``<output_root>/<series>/<run_id>/shot_NNN/``).
+2. Loads only ``decisions_*.npz`` files of those shot directories and combines
+   all chunks of a shot.
+3. Audits every shot: each expected (particle, junction) pair must have
+   exactly one decision. MISSING (0), DUPLICATE (>1) and UNEXPECTED events are
+   reported per shot / particle / actual junction label.
+4. Pools all recorded events (never per-shot means of means) into
+   mean decision per (particle ID, junction ID) and plots one line per
+   particle ID.
+
+Interpretation notes
+--------------------
+* Particle IDs are simulation-array slot indices. The same number in different
+  shots is the same *slot*, not provably the same physical particle.
+* Junction labels come from the ``junction_ids`` array in the decision files
+  (the labels from the zones NPZ), never from the internal index.
+* What is "expected": by default every expected particle x every junction in
+  the zones file. Particle count comes from the shot's ``ckpt_current.npz``
+  (``num_particles``), falling back to the formula used by
+  ``maze_cluster_script.py``. Whether every particle really has to pass every
+  junction depends on the maze topology, which no file here encodes. Supply
+  ``--expected-pairs`` (CSV: particle_id,junction_id[,shot]) for an
+  authoritative set, or ``--expected-particles exited`` to only expect
+  particles that reached the exit. The audit output states which assumption
+  was used.
+"""
+from __future__ import annotations
+
+import argparse
+import colorsys
+import csv
+import itertools
+import json
+import math
+import re
+import sys
+import tomllib
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+DECISION_RE = re.compile(r"decisions_(\d+)\.npz")
+
+STATUS_OK, STATUS_MISSING, STATUS_DUP, STATUS_UNEXPECTED = (
+    "OK", "MISSING", "DUPLICATE", "UNEXPECTED",
+)
+
+
+# --------------------------------------------------------------------------
+# Configuration / shot discovery
+# --------------------------------------------------------------------------
+@dataclass
+class ShotSpec:
+    run_id: str
+    shot: int
+    params: dict
+    out_dir: Path
+    data_dir: Path
+
+    @property
+    def name(self):
+        return f"{self.run_id}/shot_{self.shot:03d}"
+
+
+@dataclass
+class Expected:
+    particle_rows: np.ndarray            # bool (P,) which particle slots are expected
+    labels: list | None                  # junction labels (None = unknown)
+    pair_mask: np.ndarray | None = None  # bool (P, J) explicit expectation
+    complete: bool = True
+    notes: tuple = ()
+
+
+def load_series_config(config_path, root=ROOT):
+    """Load the experiment-series TOML configuration."""
+    config_path = Path(config_path).expanduser()
+    if not config_path.is_absolute() and not config_path.exists():
+        config_path = root / config_path
+    with config_path.open("rb") as fh:
+        return tomllib.load(fh), config_path
+
+
+def series_dirs(config, root=ROOT):
+    series = config["series"]
+    paths = []
+    for key in ("data_root", "output_root"):
+        p = Path(series[key])
+        paths.append((p if p.is_absolute() else root / p) / series["name"])
+    return paths[0], paths[1]  # data dir, output dir
+
+
+def expand_shots(config, series_data, series_out, regime=None):
+    """Mirror make_jobs.generate_jobs: regimes x grid product x shots."""
+    defaults = config.get("defaults", {})
+    specs = []
+    for reg in config["regimes"]:
+        if regime and reg["name"] != regime:
+            continue
+        grid = reg["grid"]
+        keys = list(grid)
+        for idx, values in enumerate(itertools.product(*(grid[k] for k in keys))):
+            params = defaults | dict(zip(keys, values))
+            run_id = f"{reg['name']}_c{idx:04d}"
+            for shot in range(reg["shots"]):
+                sn = f"shot_{shot:03d}"
+                specs.append(ShotSpec(run_id, shot, params,
+                                      series_out / run_id / sn,
+                                      series_data / run_id / sn))
+    return specs
+
+
+def find_shot_decision_files(specs, series_out, recursive=False):
+    """Find only decisions_*.npz inside each expected shot directory.
+
+    Returns ({shot_name: [files sorted by chunk number]}, [notes]).
+    """
+    found, notes = {}, []
+    for spec in specs:
+        if not spec.out_dir.is_dir():
+            found[spec.name] = []
+            notes.append(f"{spec.name}: output directory missing ({spec.out_dir})")
+            continue
+        it = spec.out_dir.rglob("decisions_*.npz") if recursive else spec.out_dir.glob("decisions_*.npz")
+        files = sorted((f for f in it if DECISION_RE.fullmatch(f.name)),
+                       key=lambda f: (int(DECISION_RE.fullmatch(f.name).group(1)), str(f)))
+        found[spec.name] = files
+        nums = {int(DECISION_RE.fullmatch(f.name).group(1)) for f in files}
+        if nums:
+            gaps = sorted(set(range(max(nums) + 1)) - nums)
+            if gaps:
+                notes.append(f"{spec.name}: decision chunk numbering has gaps {gaps}")
+    # Series isolation: decision dirs under the series that no config shot owns.
+    if series_out.is_dir():
+        owned = {s.out_dir.resolve() for s in specs}
+        stray = {p.parent for p in series_out.glob("*/*/decisions_*.npz")}
+        for d in sorted(stray):
+            if d.resolve() not in owned:
+                notes.append(f"decision files in {d} do not belong to any selected shot (ignored)")
+    return found, notes
+
+
+# --------------------------------------------------------------------------
+# Loading
+# --------------------------------------------------------------------------
+def _first(z, names):
+    for n in names:
+        if n in z.files:
+            return z[n]
+    return None
+
+
+def _as_str(arr):
+    if arr.dtype.kind == "S":
+        return np.char.decode(arr, "utf-8")
+    return arr.astype(str)
+
+
+def load_decision_data(files):
+    """Combine all chunks of one shot. Returns (events dict, problems list)."""
+    steps, pids, labs, decs, problems = [], [], [], [], []
+    for f in files:
+        try:
+            with np.load(f, allow_pickle=False) as z:
+                step = _first(z, ("global_step", "global_steps"))
+                pid = _first(z, ("particle_id", "particle_ids"))
+                dec = _first(z, ("decision", "correct"))
+                lab = z["junction_ids"] if "junction_ids" in z.files else None
+                if lab is None:
+                    idx = z["junction_id"] if "junction_id" in z.files else None
+                    if idx is None:
+                        raise KeyError("neither junction_ids nor junction_id present")
+                    problems.append(f"{f}: no junction_ids labels; using internal indices")
+                    lab = idx
+                if step is None or pid is None or dec is None:
+                    raise KeyError("missing step/particle/decision array")
+                if not (len(step) == len(pid) == len(dec) == len(lab)):
+                    raise ValueError("array lengths differ")
+                if len(step) == 0:
+                    continue
+                steps.append(step.astype(np.int64))
+                pids.append(pid.astype(np.int64))
+                labs.append(_as_str(np.asarray(lab)))
+                decs.append(dec.astype(np.int8))
+        except (OSError, ValueError, KeyError) as err:
+            problems.append(f"{f}: could not be read ({err})")
+    if steps:
+        events = dict(step=np.concatenate(steps), pid=np.concatenate(pids),
+                      jlab=np.concatenate(labs), dec=np.concatenate(decs))
+        bad = ~np.isin(events["dec"], (0, 1))
+        if bad.any():
+            problems.append(f"{int(bad.sum())} events have a decision value outside {{0,1}}")
+    else:
+        events = dict(step=np.empty(0, np.int64), pid=np.empty(0, np.int64),
+                      jlab=np.empty(0, dtype="<U1"), dec=np.empty(0, np.int8))
+    return events, problems
+
+
+# --------------------------------------------------------------------------
+# Expected combinations
+# --------------------------------------------------------------------------
+_zone_cache: dict = {}
+
+
+def _resolve_zones_file(params, root):
+    zf = params.get("zones_file")
+    if zf is None:
+        try:
+            with (root / "maze_startpoints_configuration.toml").open("rb") as fh:
+                cfgs = tomllib.load(fh)["configurations"]
+            name = "Testrun" if params.get("test_run") else (
+                params.get("maze_config") or "Ran_maze_size_prop_to_droplet")
+            zf = cfgs[name].get("zones_file")
+        except (OSError, KeyError, tomllib.TOMLDecodeError):
+            return None
+    if zf is None:
+        return None
+    zf = Path(zf).expanduser()
+    return zf if zf.is_absolute() else root / zf
+
+
+def _zone_labels(path):
+    if path not in _zone_cache:
+        try:
+            with np.load(path, allow_pickle=False) as z:
+                _zone_cache[path] = _as_str(z["junction_ids"]).tolist()
+        except (OSError, KeyError, ValueError):
+            _zone_cache[path] = None
+    return _zone_cache[path]
+
+
+def _config_particle_count(params):
+    """Same rule as maze_cluster_script.py."""
+    desired = params.get("desired_time", 200)
+    if desired:
+        return int(math.ceil(params.get("emission_rate", 0.5) * desired))
+    return int(params.get("num_particles", 60))
+
+
+def _checkpoint_meta(data_dir):
+    ckpt = data_dir / "ckpt_current.npz"
+    if not ckpt.exists():
+        return None, None
+    try:
+        with np.load(ckpt, allow_pickle=False) as z:  # lazy: only touch what we need
+            n = int(z["num_particles"]) if "num_particles" in z.files else None
+            ex = np.asarray(z["exit_trigger_time"]) if "exit_trigger_time" in z.files else None
+        return n, ex
+    except (OSError, ValueError):
+        return None, None
+
+
+def load_expected_pairs(path):
+    out = defaultdict(set)
+    with open(path, newline="") as fh:
+        for row in csv.DictReader(fh):
+            out[(row.get("shot") or "*").strip()].add(
+                (int(row["particle_id"]), str(row["junction_id"]).strip()))
+    return out
+
+
+def determine_expected_combinations(spec, root, particle_mode="all", pairs_override=None):
+    """Decide which particle/junction pairs must have exactly one decision."""
+    notes = []
+    if pairs_override is not None:
+        pairs = set(pairs_override.get("*", set())) | set(pairs_override.get(spec.name, set())) \
+            | set(pairs_override.get(f"{spec.run_id}/shot_{spec.shot:03d}", set()))
+        if pairs:
+            labels = list(dict.fromkeys(j for _, j in sorted(pairs)))
+            col = {l: i for i, l in enumerate(labels)}
+            P = max(p for p, _ in pairs) + 1
+            mask = np.zeros((P, len(labels)), bool)
+            for p, j in pairs:
+                mask[p, col[j]] = True
+            return Expected(mask.any(axis=1), labels, mask, True, ("explicit --expected-pairs",))
+        notes.append("no rows for this shot in --expected-pairs; using default rule")
+
+    n_ckpt, exit_t = _checkpoint_meta(spec.data_dir)
+    n_cfg = _config_particle_count(spec.params)
+    complete = True
+    if n_ckpt is None:
+        n = n_cfg
+        notes.append(f"no readable checkpoint; particle count {n} from config formula")
+    else:
+        n = n_ckpt
+        if n_ckpt != n_cfg:
+            notes.append(f"checkpoint num_particles={n_ckpt} != config-derived {n_cfg}; using checkpoint")
+    rows = np.ones(n, bool)
+    if particle_mode == "exited":
+        if exit_t is None or len(exit_t) < n:
+            notes.append("exit_trigger_time unavailable; cannot restrict to exited particles")
+            complete = False
+        else:
+            rows = np.isfinite(exit_t[:n])
+
+    zf = _resolve_zones_file(spec.params, root)
+    labels = _zone_labels(zf) if zf is not None else None
+    if labels is None:
+        notes.append("junction labels unavailable from zones file; using labels seen in the shot "
+                     "(missing-decision detection per junction is INCOMPLETE)")
+        complete = False
+    return Expected(rows, labels, None, complete, tuple(notes))
+
+
+# --------------------------------------------------------------------------
+# Audit
+# --------------------------------------------------------------------------
+def audit_decision_counts(shot_name, events, exp, writer=None):
+    """Check every expected shot/particle/junction combination.
+
+    Returns (stats dict, warnings list, labels list used).
+    """
+    step, pid, jlab = events["step"], events["pid"], events["jlab"]
+    if jlab.size:
+        ulabels, inv = np.unique(jlab, return_inverse=True)
+        inv = inv.ravel()
+    else:
+        ulabels, inv = np.array([], dtype=str), np.empty(0, np.int64)
+
+    labels = list(exp.labels) if exp.labels is not None else sorted(ulabels.tolist())
+    J = len(labels)
+    col_of = {l: i for i, l in enumerate(labels)}
+    cols = np.array([col_of.get(l, -1) for l in ulabels.tolist()], dtype=np.int64)
+    jcol = cols[inv] if inv.size else np.empty(0, np.int64)
+
+    if exp.pair_mask is not None:
+        prow = exp.pair_mask.shape[0]
+    else:
+        prow = len(exp.particle_rows)
+    P = max(prow, int(pid.max()) + 1 if pid.size else 0)
+    mask = np.zeros((P, J), bool)
+    if exp.pair_mask is not None:
+        mask[:prow] = exp.pair_mask
+    else:
+        mask[:prow, :] = exp.particle_rows[:, None]
+
+    valid = (jcol >= 0) & (pid >= 0)
+    key = pid[valid] * J + jcol[valid]
+    counts = np.bincount(key, minlength=P * J).reshape(P, J)
+    if key.size:
+        uniq = np.unique(np.column_stack((key, step[valid])), axis=0)
+        dsteps = np.bincount(uniq[:, 0], minlength=P * J).reshape(P, J)
+    else:
+        dsteps = np.zeros((P, J), dtype=np.int64)
+
+    warnings = []
+    for p, j in zip(*np.nonzero(mask | (counts > 0))):
+        c, d = int(counts[p, j]), int(dsteps[p, j])
+        if mask[p, j]:
+            status = STATUS_OK if c == 1 else (STATUS_MISSING if c == 0 else STATUS_DUP)
+            expected = 1
+        else:
+            status, expected = STATUS_UNEXPECTED, 0
+        if writer is not None:
+            writer.writerow([shot_name, int(p), labels[j], c, expected, status, d])
+        if status == STATUS_MISSING or status == STATUS_DUP:
+            warnings.append(f"WARNING: {shot_name} | particle {p} | junction {labels[j]} | "
+                            f"{c} decisions recorded (expected exactly 1)")
+        elif status == STATUS_UNEXPECTED:
+            warnings.append(f"WARNING: {shot_name} | particle {p} | junction {labels[j]} | "
+                            f"{c} decisions recorded (pair not expected)")
+
+    # Events whose label / particle ID is outside everything we know.
+    bad = Counter(zip(pid[~valid].tolist(), jlab[~valid].tolist()))
+    for (p, l), c in sorted(bad.items()):
+        if writer is not None:
+            writer.writerow([shot_name, p, l, c, 0, STATUS_UNEXPECTED, ""])
+        warnings.append(f"WARNING: {shot_name} | particle {p} | junction {l} | "
+                        f"{c} decisions recorded (unknown junction label or particle ID)")
+
+    stats = dict(
+        particles=int(mask.any(axis=1).sum()),
+        expected_pairs=int(mask.sum()),
+        ok=int(((counts == 1) & mask).sum()),
+        missing=int(((counts == 0) & mask).sum()),
+        duplicate=int(((counts > 1) & mask).sum()),
+        unexpected=int(((counts > 0) & ~mask).sum()) + len(bad),
+        events=int(pid.size),
+    )
+    return stats, warnings, labels
+
+
+# --------------------------------------------------------------------------
+# Aggregation (pooled events, never mean of per-shot means)
+# --------------------------------------------------------------------------
+def shot_partial_sums(events, global_index):
+    """Per-shot (pid, junction col, sum, count); all recorded events included."""
+    ok = events["pid"] >= 0
+    if not ok.any():
+        return None
+    ulab, inv = np.unique(events["jlab"][ok], return_inverse=True)
+    g = np.array([global_index.setdefault(l, len(global_index)) for l in ulab.tolist()])
+    pairs = np.column_stack((events["pid"][ok], g[inv.ravel()]))
+    uniq, inv2 = np.unique(pairs, axis=0, return_inverse=True)
+    inv2 = inv2.ravel()
+    sums = np.bincount(inv2, weights=events["dec"][ok].astype(float), minlength=len(uniq))
+    cnts = np.bincount(inv2, minlength=len(uniq))
+    return uniq[:, 0], uniq[:, 1], sums, cnts
+
+
+def aggregate_decisions(partials, global_index):
+    """Combine per-shot partial sums. Returns (particle_ids, labels, mean, count)."""
+    labels = sorted(global_index, key=global_index.get)
+    partials = [p for p in partials if p is not None]
+    if not partials:
+        return np.array([], int), labels, np.empty((0, len(labels))), np.zeros((0, len(labels)), int)
+    pid = np.concatenate([p[0] for p in partials])
+    col = np.concatenate([p[1] for p in partials])
+    s = np.concatenate([p[2] for p in partials])
+    c = np.concatenate([p[3] for p in partials])
+    pids = np.unique(pid)
+    row = np.searchsorted(pids, pid)
+    S = np.zeros((len(pids), len(labels)))
+    C = np.zeros((len(pids), len(labels)), dtype=np.int64)
+    np.add.at(S, (row, col), s)
+    np.add.at(C, (row, col), c)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.where(C > 0, S / np.maximum(C, 1), np.nan)
+    return pids, labels, mean, C
+
+
+# --------------------------------------------------------------------------
+# Plot
+# --------------------------------------------------------------------------
+def _particle_color(pid):
+    h = (pid * 0.61803398875) % 1.0
+    s = 0.9 if pid % 2 == 0 else 0.6
+    v = 0.85 if (pid // 2) % 2 == 0 else 0.65
+    return colorsys.hsv_to_rgb(h, s, v)
+
+
+def plot_particle_decisions(pids, labels, mean, series_name, status_line, failed,
+                            n_shots, output_path, dpi=200):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n = len(pids)
+    ncol = max(1, math.ceil(n / 25))
+    fig, ax = plt.subplots(figsize=(10 + 0.6 * ncol, 7))
+    x = np.arange(len(labels))
+    for i, p in enumerate(pids):
+        # NaN stays NaN: lines break at junctions without observations.
+        ax.plot(x, mean[i], marker="o", ms=3, lw=1, color=_particle_color(int(p)), label=str(int(p)))
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45 if len(labels) > 10 else 0, ha="right" if len(labels) > 10 else "center")
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Junction ID")
+    ax.set_ylabel("Average decision (fraction correct)")
+    ax.grid(True, alpha=0.3)
+    ax.set_title(f"{series_name}\n{status_line}", color="crimson" if failed else "black", fontsize=11)
+    if n:
+        ax.legend(title="Particle ID", loc="upper left", bbox_to_anchor=(1.01, 1.0),
+                  ncol=ncol, fontsize=6, title_fontsize=7, frameon=False,
+                  handlelength=1.2, columnspacing=0.8)
+    fig.text(0.01, 0.005,
+             f"Pooled over {n_shots} shots; every recorded event weighs equally. "
+             "Particle IDs are simulation slot indices, not tracked physical particles. "
+             "Gaps = no observation.", fontsize=7, va="bottom")
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--config", required=True, type=Path, help="experiment-series TOML")
+    ap.add_argument("--root", type=Path, default=ROOT, help="project root for relative paths")
+    ap.add_argument("--decisions-dir", type=Path,
+                    help="override <output_root>/<series> as the decision-log base directory")
+    ap.add_argument("--output-dir", type=Path,
+                    help="evaluation output directory (default: <output_root>/<series>/decision_evaluation)")
+    ap.add_argument("--regime", help="evaluate only this regime name")
+    ap.add_argument("--recursive", action="store_true",
+                    help="search each shot directory recursively for decisions_*.npz")
+    ap.add_argument("--strict", action="store_true", help="exit 1 if the audit does not pass")
+    ap.add_argument("--no-plot-on-errors", action="store_true",
+                    help="skip the plot if the audit does not pass (default: draw a clearly "
+                         "labelled diagnostic plot)")
+    ap.add_argument("--plot-on-errors", action="store_true", help=argparse.SUPPRESS)  # legacy no-op
+    ap.add_argument("--expected-particles", choices=("all", "exited"), default="all",
+                    help="expect decisions from all particles or only those that reached the exit")
+    ap.add_argument("--expected-pairs", type=Path,
+                    help="CSV particle_id,junction_id[,shot] defining the expected pairs")
+    ap.add_argument("--max-warnings", type=int, default=200,
+                    help="max warnings printed (all are in the audit CSV); -1 = all")
+    ap.add_argument("--dpi", type=int, default=200)
+    args = ap.parse_args(argv)
+
+    root = args.root.resolve()
+    config, config_path = load_series_config(args.config, root)
+    series_name = config["series"]["name"]
+    series_data, series_out = series_dirs(config, root)
+    default_eval_dir = series_out / "decision_evaluation"
+    if args.decisions_dir:
+        series_out = args.decisions_dir
+    eval_dir = args.output_dir or default_eval_dir
+    eval_dir.mkdir(parents=True, exist_ok=True)
+
+    specs = expand_shots(config, series_data, series_out, args.regime)
+    if not specs:
+        ap.error("no shots found in the configuration (check --regime)")
+    files_by_shot, notes = find_shot_decision_files(specs, series_out, args.recursive)
+    pairs_override = load_expected_pairs(args.expected_pairs) if args.expected_pairs else None
+
+    totals = Counter()
+    all_warnings, load_problems, partials = [], [], []
+    global_index: dict = {}
+    incomplete = False
+    shots_without_files = 0
+
+    audit_path = eval_dir / "decision_integrity_audit.csv"
+    with audit_path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["shot", "particle_id", "junction_id", "number_of_decisions",
+                         "expected_decisions", "status", "distinct_steps"])
+        for spec in specs:
+            files = files_by_shot[spec.name]
+            if not files:
+                shots_without_files += 1
+            events, problems = load_decision_data(files)
+            load_problems += [f"{spec.name}: {p}" for p in problems]
+            exp = determine_expected_combinations(spec, root, args.expected_particles, pairs_override)
+            notes += [f"{spec.name}: {n}" for n in exp.notes if n != "explicit --expected-pairs"]
+            incomplete |= not exp.complete
+            stats, warns, labels = audit_decision_counts(spec.name, events, exp, writer)
+            for l in labels:
+                global_index.setdefault(l, len(global_index))
+            totals.update(stats)
+            all_warnings += warns
+            partials.append(shot_partial_sums(events, global_index))
+
+    pids, labels, mean, counts = aggregate_decisions(partials, global_index)
+    with (eval_dir / "particle_decision_averages.csv").open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["particle_id", "junction_id", "mean_decision", "number_of_decisions"])
+        for i, p in enumerate(pids):
+            for j, l in enumerate(labels):
+                w.writerow([int(p), l, "nan" if np.isnan(mean[i, j]) else f"{mean[i, j]:.6g}",
+                            int(counts[i, j])])
+
+    violations = len(all_warnings) + len(load_problems)
+    if violations:
+        status = "FAILED"
+    elif incomplete:
+        status = "INCOMPLETE"
+    else:
+        status = "PASSED"
+    assumption = ("explicit expected pairs" if pairs_override else
+                  f"assumed: {args.expected_particles} particles x every junction in zones file")
+
+    # ---- console report
+    limit = None if args.max_warnings < 0 else args.max_warnings
+    for msg in all_warnings[:limit]:
+        print(msg)
+    if limit is not None and len(all_warnings) > limit:
+        print(f"... {len(all_warnings) - limit} more warnings (see {audit_path.name})")
+    for msg in load_problems:
+        print(f"WARNING (load): {msg}")
+    for msg in notes:
+        print(f"NOTE: {msg}")
+
+    print("\nDecision integrity audit")
+    print("------------------------")
+    print(f"Series:                          {series_name} ({config_path})")
+    print(f"Shots inspected:                 {len(specs)}  (without any decision file: {shots_without_files})")
+    print(f"Particles inspected:             {totals['particles']}  (summed over shots)")
+    print(f"Expected particle-junction pairs: {totals['expected_pairs']}")
+    print(f"Pairs with exactly 1 decision:   {totals['ok']}")
+    print(f"Pairs with 0 decisions:          {totals['missing']}")
+    print(f"Pairs with multiple decisions:   {totals['duplicate']}")
+    print(f"Unexpected pairs/events:         {totals['unexpected']}")
+    print(f"Total integrity warnings:        {violations}")
+    print(f"Expectation rule:                {assumption}")
+    print(f"AUDIT STATUS:                    {status}")
+    if status == "PASSED" and not pairs_override:
+        print("  (clean only relative to the expectation rule above; the maze topology was not verified)")
+
+    summary = dict(series=series_name, status=status, shots=len(specs),
+                   shots_without_decision_files=shots_without_files,
+                   particles_summed_over_shots=totals["particles"],
+                   expected_pairs=totals["expected_pairs"], ok_pairs=totals["ok"],
+                   missing_pairs=totals["missing"], duplicate_pairs=totals["duplicate"],
+                   unexpected=totals["unexpected"], load_problems=len(load_problems),
+                   total_warnings=violations, expectation_rule=assumption,
+                   incomplete_missing_detection=incomplete, notes=notes)
+    (eval_dir / "decision_audit_summary.json").write_text(json.dumps(summary, indent=2))
+
+    # ---- plot
+    plot_path = eval_dir / "particle_decision_average_vs_junction.png"
+    if status == "PASSED" or not args.no_plot_on_errors:
+        if status == "PASSED":
+            line = f"Integrity audit: PASSED ({len(specs)} shots)"
+        else:
+            line = (f"DIAGNOSTIC PLOT - INTEGRITY AUDIT {status}: {totals['missing']} missing, "
+                    f"{totals['duplicate']} duplicate, {totals['unexpected']} unexpected")
+        plot_particle_decisions(pids, labels, mean, series_name, line, status != "PASSED",
+                                len(specs), plot_path, args.dpi)
+        print(f"Plot:  {plot_path}")
+    else:
+        print("Plot skipped because the audit did not pass (--no-plot-on-errors was given).")
+    print(f"Files in: {eval_dir}")
+
+    return 1 if (args.strict and status != "PASSED") else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
