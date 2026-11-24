@@ -1,5 +1,5 @@
-# Generated summary; edit junction_zones.toml for zone radii and centers.
-maze_file = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/Ran_maze_size_prop_to_droplet.tsv"
+# Generated summary; edit junction_zones.toml for zone distances, radii, centers, and drops.
+maze_file = "/home/eric/documents/uni/1_simulation/different_mazes/Ran_maze_size_prop_to_droplet.tsv"
 maze_hash = "49ecd597e538d3f88654350d433d6b4faad6d4847f3264e597ef724205685c3d"
 wall_value = 1
 dx = 1.0
@@ -9,7 +9,7 @@ simulation_shape = [99, 110]
 path_length = 587
 emitter_grid = [27, 4]
 goal_grid = [94, 84]
-plot_path = "/home/ecasual/Documents/Uni/droplet-maze/simulation-code/different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_decision_zones.png"
+plot_path = "/home/eric/documents/uni/1_simulation/different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_decision_zones.png"
 zone_extent = "maximal"
 emitter_position = [3.8, 82.3]
 static_source_position = [90.2, 10.5]
@@ -149,3 +149,11 @@ path_index = 548
 branch_count = 3
 kind = "Y"
 neighbors = [[92, 52], [94, 50], [96, 52]]
+
+[[junctions]]
+id = "J18"
+center = [92, 84]
+path_index = 584
+branch_count = 3
+kind = "Y"
+neighbors = [[91, 82], [91, 85], [94, 84]]
