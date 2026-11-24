@@ -5,17 +5,23 @@ output_root = "output"
 
 [defaults]
 maze_config = "QJ01_config0"
-dt = 0.0005
-beta = -8
-grim_reaper_delay = 1.0
-desired_time = 200
-part_every = 100
-conc_every = 100
-n_steps = 100
-test_run = false
-resume_simulation = true
+dt = 0.0005                # needs 200*dt <= 0.25
+beta = -8                  # Bp = beta*1e4; negative = repulsion
+emission_rate = 0.5        # droplets per time unit
+grim_reaper_delay = 1.0    # delay between reaching exit and removal
+desired_time = 200         # total sim time; overrides num_particles
+n_steps = 10               # rolling buffer length (>= 2)
+# num_particles = 60       # only used if desired_time = 0
+part_every = 100           # particle snapshot interval (steps)
+conc_every = 100           # concentration snapshot interval, multiple of part_>
+test_run = false           # true forces the "Testrun" maze
+resume_simulation = false  # resume from ckpt_previous.npz
+seed = 0
+track_decisions = true     # needs zones_file
 zones_file = "different_mazes/QJ01_analysis/zone_masks.npz"
-track_decisions = true
+decision_flush_loops = 1000
+stage_dir = "/dev/shm/maze_stage"   # tmpfs buffer for conc/part files
+stage_budget_gb = 1.3               # per job; total = this x --jobs
 
 
 [[regimes]]
@@ -23,4 +29,4 @@ name = "rate-sweep"
 shots = 13
 
 [regimes.grid]
-emission_rate = [0.05, 0.01, 0.1, 0.02, 0.08, 0.04, 0.06, 0.03, 0.07, 0.02, 0.09]
+emission_rate = [0.05, 0.01, 0.1, 0.02, 0.2, 0.08, 0.04, 0.06, 0.03, 0.07, 0.02, 0.09]

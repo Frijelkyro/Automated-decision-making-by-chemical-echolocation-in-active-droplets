@@ -1,3 +1,7 @@
+import atexit
+import shutil
+import signal
+import sys
 import zlib
 import argparse
 import os
@@ -57,7 +61,11 @@ parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--track-decisions", action="store_true", default=False)
 parser.add_argument("--zones-file", type=Path)
 parser.add_argument("--decision-flush-loops", type=int, default=100)
+parser.add_argument("--stage-dir", help="tmpfs directory (e.g. /dev/shm/maze_stage) to buffer conc/part files.")
+parser.add_argument("--stage-budget-gb", type=float, default=1.0, help="Flush staged files to --data-dir once this size is reached.")
 args = parser.parse_args()
+
+# choose set-seed + shot number and config name for the seed
 effective_seed = int(np.random.SeedSequence(
     [args.seed, args.shot, zlib.crc32(args.run_id.encode())]
 ).generate_state(1)[0])
@@ -165,7 +173,37 @@ param_filename = os.path.join(data, "param.txt")
 grid_filename = os.path.join(data, "grid.txt")
 file_prefix_conc = os.path.join(data, "conc")
 file_prefix_part = os.path.join(data, "part")
+stage_dir = None
+stage_budget = int(args.stage_budget_gb * 1024**3)
+if args.stage_dir:
+    stage_dir = Path(args.stage_dir) / (
+        f"{zlib.crc32(os.path.abspath(data).encode()):08x}_{args.run_id}_{args.shot}"
+    )
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    file_prefix_conc = os.path.join(stage_dir, "conc")
+    file_prefix_part = os.path.join(stage_dir, "part")
+    param_filename = os.path.join(stage_dir, "param.txt")
 
+def stage_bytes():
+    return sum(f.stat().st_size for f in stage_dir.iterdir()
+               if f.is_file() and not f.name.startswith((".", "ckpt_")))
+
+def flush_stage():
+    """Move staged files to the real data dir (copy to temp name, then atomic rename)."""
+    if stage_dir is None or not stage_dir.exists():
+        return
+    for f in sorted(stage_dir.iterdir()):
+      if f.name.startswith(".") or not f.is_file():
+            continue
+    tmp = Path(data) / f".{f.name}.tmp"
+    shutil.copy2(f, tmp)
+    os.replace(tmp, Path(data) / f.name)
+    if not f.name.startswith("ckpt_"):
+        f.unlink()
+
+if stage_dir is not None:
+    atexit.register(flush_stage)  # normal end, finished, uncaught exceptions
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # so atexit also runs when parallel kills jobs
 
 maze = maze_from_file(str(maze_file))
 wall = np.transpose(np.where(maze == 0))
@@ -476,6 +514,8 @@ for i in pbar:
     global_step += n_steps - 1
     global_step += 1
     simulation_time = end_time
+    if stage_dir is not None and stage_bytes() >= stage_budget:
+        flush_stage()
 
     if (
         junction_tracker is not None

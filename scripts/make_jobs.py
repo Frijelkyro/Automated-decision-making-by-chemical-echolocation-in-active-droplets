@@ -26,6 +26,8 @@ PARAMETER_FLAGS = {
     "track_decisions": "--track-decisions",
     "zones_file": "--zones-file",
     "decision_flush_loops": "--decision-flush-loops",
+    "stage_dir": "--stage-dir",
+    "stage_budget_gb": "--stage-budget-gb",
 }
 
 

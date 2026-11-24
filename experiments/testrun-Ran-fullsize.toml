@@ -16,7 +16,8 @@ test_run = false
 resume_simulation = false
 zones_file = "different_mazes/Ran_maze_size_prop_to_droplet_analysis/zone_masks.npz"
 track_decisions = true
-
+stage_dir = "/dev/shm/maze_stage"
+stage_budget_gb = 1.3     # per job! 3 parallel jobs x 1.3 = ~4 GB total
 
 [[regimes]]
 name = "testrun"
