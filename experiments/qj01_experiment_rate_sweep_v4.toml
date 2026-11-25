@@ -15,7 +15,7 @@ n_steps = 10               # rolling buffer length (>= 2)
 part_every = 100           # particle snapshot interval (steps)
 conc_every = 100           # concentration snapshot interval, multiple of part_>
 test_run = false           # true forces the "Testrun" maze
-resume_simulation = false  # resume from ckpt_previous.npz
+resume_simulation = true  # resume from ckpt_previous.npz
 seed = 0
 track_decisions = true     # needs zones_file
 zones_file = "different_mazes/QJ01_analysis/zone_masks.npz"

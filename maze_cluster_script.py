@@ -192,14 +192,15 @@ def flush_stage():
     """Move staged files to the real data dir (copy to temp name, then atomic rename)."""
     if stage_dir is None or not stage_dir.exists():
         return
-    for f in sorted(stage_dir.iterdir()):
-      if f.name.startswith(".") or not f.is_file():
-            continue
-    tmp = Path(data) / f".{f.name}.tmp"
-    shutil.copy2(f, tmp)
-    os.replace(tmp, Path(data) / f.name)
-    if not f.name.startswith("ckpt_"):
-        f.unlink()
+    files = [f for f in stage_dir.iterdir()
+             if f.is_file() and not f.name.startswith(".")]
+    files.sort(key=lambda f: f.name.startswith("ckpt_"))  # ckpt_* last
+    for f in files:
+        tmp = Path(data) / f".{f.name}.tmp"
+        shutil.copy2(f, tmp)
+        os.replace(tmp, Path(data) / f.name)
+        if not f.name.startswith("ckpt_"):
+            f.unlink()
 
 if stage_dir is not None:
     atexit.register(flush_stage)  # normal end, finished, uncaught exceptions
@@ -278,6 +279,14 @@ resume_step = 0  # this will be read from the last sim
 resume_old_dt = np.inf
 resume_new_dt = dt
 resumed_from_checkpoint = False
+
+if stage_dir is not None:
+    if resume_simulation:
+        flush_stage()          # rescue what a killed run left in tmpfs
+    else:
+        for f in stage_dir.iterdir():   # fresh start: don't inherit stale files
+            if f.is_file():
+                f.unlink()
 
 if resume_simulation:
     checkpoint_previous = os.path.join(data, "ckpt_previous.npz")
