@@ -60,7 +60,7 @@ class ShotSpec:
     shot: int
     grid: dict[str, Any]
     params: dict[str, Any]
-    decisions_dir: Path
+    out_dir: Path
     data_dir: Path
 
     @property
@@ -89,7 +89,7 @@ def series_dirs(config: dict, root: Path) -> tuple[Path, Path]:
 def expand_shots(
     config: dict,
     series_data: Path,
-    series_decisions: Path,
+    series_out: Path,
     regime_filter: str | None = None,
     run_ids: set[str] | None = None,
 ) -> list[ShotSpec]:
@@ -119,7 +119,7 @@ def expand_shots(
                         shot=shot,
                         grid=grid_values,
                         params=params,
-                        decisions_dir=series_decisions / run_id / shot_name,
+                        out_dir=series_out / run_id / shot_name,
                         data_dir=series_data / run_id / shot_name,
                     )
                 )
@@ -132,11 +132,11 @@ def find_shot_decision_files(
     found: dict[str, list[Path]] = {}
     notes: list[str] = []
     for spec in specs:
-        if not spec.decisions_dir.is_dir():
+        if not spec.out_dir.is_dir():
             found[spec.name] = []
-            notes.append(f"{spec.name}: output directory missing ({spec.decisions_dir})")
+            notes.append(f"{spec.name}: output directory missing ({spec.out_dir})")
             continue
-        iterator = spec.decisions_dir.rglob("decisions_*.npz") if recursive else spec.decisions_dir.glob("decisions_*.npz")
+        iterator = spec.out_dir.rglob("decisions_*.npz") if recursive else spec.out_dir.glob("decisions_*.npz")
         files = sorted(
             (path for path in iterator if DECISION_RE.fullmatch(path.name)),
             key=lambda path: (int(DECISION_RE.fullmatch(path.name).group(1)), str(path)),
@@ -972,7 +972,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--regime", help="only analyze configurations from this regime")
     parser.add_argument(
         "--decisions-dir", type=Path,
-        help="override the decision-log directory (normally <data_root>/<series>)",
+        help="override the decision-log base directory (normally <output_root>/<series>)",
     )
     parser.add_argument(
         "--output-dir", type=Path,
@@ -998,40 +998,19 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         parser.error(f"Cannot load experiment config: {exc}")
     series_name = config["series"]["name"]
-
-    # Simulation data contains both decision logs and checkpoints.
-    series_data, series_output = series_dirs(config, root)
-
-    # By default, decision logs live alongside checkpoints.
-    # An explicit override points directly to the directory containing
-    # the rate-sweep_cNNNN directories.
-    series_decisions = series_data
+    series_data, series_out = series_dirs(config, root)
 
     if args.decisions_dir:
-        series_decisions = args.decisions_dir.expanduser()
-        if not series_decisions.is_absolute():
-            series_decisions = root / series_decisions
-
-    # Analysis products are kept separate from simulation data.
-    base_dir = (
-        args.output_dir.expanduser()
-        if args.output_dir
-        else series_output / ANALYSIS_DIRNAME
-    )
-
+        decisions_base = args.decisions_dir.expanduser()
+        series_out = decisions_base if decisions_base.is_absolute() else (root / decisions_base)
+    base_dir = args.output_dir.expanduser() if args.output_dir else (series_dirs(config, root)[1] / ANALYSIS_DIRNAME)
     if not base_dir.is_absolute():
         base_dir = root / base_dir
 
     selected_run_ids = set(args.run_id) if args.run_id else None
-    specs = expand_shots(
-        config,
-        series_data,
-        series_decisions,
-        args.regime,
-        selected_run_ids,
-    )    
+    specs = expand_shots(config, series_data, series_out, args.regime, selected_run_ids)
     if not specs:
-            parser.error("No matching configurations/shots (check --run-id / --regime)")
+        parser.error("No matching configurations/shots (check --run-id / --regime)")
 
     # Stable configuration ordering follows TOML regime/grid order, not filesystem order.
     groups: dict[str, list[ShotSpec]] = {}
