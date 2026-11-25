@@ -204,7 +204,13 @@ def flush_stage():
 
 if stage_dir is not None:
     atexit.register(flush_stage)  # normal end, finished, uncaught exceptions
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # so atexit also runs when parallel kills jobs
+
+def _on_term(*_):
+    print(f"INTERRUPTED by SIGTERM at step {globals().get('global_step')}, "
+          f"t={globals().get('simulation_time')}", flush=True)
+    sys.exit(143)
+
+signal.signal(signal.SIGTERM, _on_term)
 
 maze = maze_from_file(str(maze_file))
 wall = np.transpose(np.where(maze == 0))
@@ -466,6 +472,10 @@ pbar = tqdm(
 )
 
 global_step = resume_step + 1 if resumed_from_checkpoint else 0
+finished = False
+print(f"START resumed={resumed_from_checkpoint} step={global_step} "
+      f"t={simulation_time:.2f}/{desired_time} loops_planned={time_loop}"
+      + ("  -> NOTHING TO DO" if time_loop <= 0 else ""), flush=True)
 
 # ---------------- Simulation loop ------------------
 for i in pbar:
@@ -535,10 +545,8 @@ for i in pbar:
     if finished:
         conc[-1, :, :] = conc[exit_timestep % n_steps, :, :]
         loop_duration = perf_counter() - loop_t0
-        print(
-            f"Loop {i}: {loop_duration:.3f} s",
-            flush=True,
-        )
+        print(f"FINISHED: Loop {i}: step {end_step} t={simulation_time:.2f}/{desired_time} "
+              f"{loop_duration:.3f}s", flush=True)
         break
     # set the first particles parameters for the next loop to the most recent from the current loop
     conc[0, :, :] = conc[-1, :, :]
@@ -555,10 +563,9 @@ for i in pbar:
         simulation_time=f"{simulation_time:.0f}s",
     )
     loop_duration = perf_counter() - loop_t0
-    print(
-        f"Loop {i}: {loop_duration:.3f} s",
-        flush=True,
-    )
+    if i % 100 == 0:
+        print(f"Loop {i}: step {end_step} t={simulation_time:.2f}/{desired_time} "
+              f"{loop_duration:.3f}s", flush=True)
 
 if junction_tracker is not None:
     junction_tracker.flush(output_dir)

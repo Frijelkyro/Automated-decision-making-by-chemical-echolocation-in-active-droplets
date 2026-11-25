@@ -83,8 +83,13 @@ def generate_jobs(config_path, resume_override=None):
                     "--data-dir", str(data_dir),
                     "--output-dir", str(output_dir),
                 ])
-                jobs.append(f"{shlex.join(args)} 2>> {shlex.quote(str(output_root / series['name'] / 'tqdm_output.log'))}")
-
+                output_dir.mkdir(parents=True, exist_ok=True)
+                log = shlex.quote(str(output_dir / "run.log"))
+                stamp = "$(date '+%F %T')"
+                jobs.append(
+                    f'(echo "=== {stamp} START ==="; {shlex.join(args)}; '
+                    f'echo "=== {stamp} END exit=$? ===") >> {log} 2>&1'
+                )
     jobfile = output_root / series["name"] / "jobs.txt"
     jobfile.parent.mkdir(parents=True, exist_ok=True)
     jobfile.write_text("\n".join(jobs) + "\n")

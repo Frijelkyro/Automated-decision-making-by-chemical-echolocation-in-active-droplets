@@ -50,7 +50,7 @@ def main():
         resume_override=True if args.resume else None,
     )
     joblog = jobfile.with_name(
-        f"joblog-checkpoint-resume-{time.time_ns()}"
+        time.strftime("joblog-resume-%Y%m%d-%H%M%S")
         if resume_checkpoints
         else "joblog"
     )
