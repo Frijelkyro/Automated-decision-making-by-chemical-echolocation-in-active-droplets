@@ -23,4 +23,4 @@ name = "testrun"
 shots = 2
 
 [regimes.grid]
-emission_rate = [1.0]
+emission_rate = [1.0, 0.05]
