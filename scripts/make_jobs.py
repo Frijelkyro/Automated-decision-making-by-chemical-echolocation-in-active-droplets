@@ -87,8 +87,8 @@ def generate_jobs(config_path, resume_override=None):
                 log = shlex.quote(str(output_dir / "run.log"))
                 stamp = "$(date '+%F %T')"
                 jobs.append(
-                    f'(echo "=== {stamp} START ==="; {shlex.join(args)}; '
-                    f'echo "=== {stamp} END exit=$? ===") >> {log} 2>&1'
+                    f'(echo "=== $(date \'+%F %T\') START ==="; {shlex.join(args)}; '
+                    f'rc=$?; echo "=== $(date \'+%F %T\') END exit=$rc ==="; exit $rc) >> {log} 2>&1'
                 )
     jobfile = output_root / series["name"] / "jobs.txt"
     jobfile.parent.mkdir(parents=True, exist_ok=True)

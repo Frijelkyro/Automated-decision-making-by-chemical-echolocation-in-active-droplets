@@ -57,11 +57,12 @@ def main():
     command = [parallel, "-j", str(args.jobs), "--joblog", str(joblog)]
     if args.progress:
         command.append("--bar")
-    command.append("--halt-on-error=2")
+    command.append("--halt-on-error=never")  # set to 2 to kill all running jobs and exit as soon as any job fails
 
     with jobfile.open() as job_input:
-        subprocess.run(command, stdin=job_input, cwd=ROOT, check=True)
-
-
+        result = subprocess.run(command, stdin=job_input, cwd=ROOT)
+    if result.returncode:
+        print(f"{result.returncode} job(s) failed; see {joblog}")
+    
 if __name__ == "__main__":
     main()
