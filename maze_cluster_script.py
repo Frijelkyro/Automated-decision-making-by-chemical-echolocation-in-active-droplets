@@ -63,6 +63,10 @@ parser.add_argument("--zones-file", type=Path)
 parser.add_argument("--decision-flush-loops", type=int, default=100)
 parser.add_argument("--stage-dir", help="tmpfs directory (e.g. /dev/shm/maze_stage) to buffer conc/part files.")
 parser.add_argument("--stage-budget-gb", type=float, default=1.0, help="Flush staged files to --data-dir once this size is reached.")
+parser.add_argument("--resume-from", default="ckpt_previous.npz",
+                    help="Checkpoint file name or step number, e.g. 291599 or ckpt_291599.npz")
+parser.add_argument("--reseed-on-resume", action="store_true",
+                    help="Draw fresh noise after restoring the RNG state.")
 args = parser.parse_args()
 
 # choose set-seed + shot number and config name for the seed
@@ -71,6 +75,10 @@ effective_seed = int(np.random.SeedSequence(
 ).generate_state(1)[0])
 np.random.seed(effective_seed)
 random.seed(effective_seed)
+
+resume_ckpt = args.resume_from
+if resume_ckpt.isdigit():
+    resume_ckpt = f"ckpt_{resume_ckpt}.npz"
 
 config_path = args.startpoints_config.expanduser()
 if not config_path.is_absolute():
@@ -295,7 +303,7 @@ if stage_dir is not None:
                 f.unlink()
 
 if resume_simulation:
-    checkpoint_previous = os.path.join(data, "ckpt_previous.npz")
+    checkpoint_previous = os.path.join(data, resume_ckpt)
     checkpoint_exists = os.path.exists(checkpoint_previous)
 
     if checkpoint_exists:
@@ -317,6 +325,7 @@ if resume_simulation:
             param_filename,
             maze,
             n_steps,
+            resume_ckpt
         )
         checkpoint_num_particles = len(active_mask)
         if checkpoint_num_particles < num_particles:

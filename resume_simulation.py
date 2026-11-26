@@ -52,8 +52,8 @@ def _read_particles(filename, num_particles, n_steps):
     return p, theta, v, omega
 
 
-def resume_simulation_from_file(data, param_filename, maze, n_steps):
-    checkpoint_filename = os.path.join(data, "ckpt_previous.npz")
+def resume_simulation_from_file(data, param_filename, maze, n_steps, ckpt_name="ckpt_previous.npz"):
+    checkpoint_filename = os.path.join(data, ckpt_name)
     if not os.path.exists(checkpoint_filename):
         raise FileNotFoundError(
             f"Checkpoint bundle not found: {checkpoint_filename}"

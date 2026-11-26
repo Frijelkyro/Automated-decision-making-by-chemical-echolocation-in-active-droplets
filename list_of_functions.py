@@ -538,6 +538,14 @@ def write_param_snapshot(
             shutil.copy2(temp, previous_temp)
             os.replace(previous_temp, previous)
         os.replace(temp, current)
+        # --- history ring: never lose older checkpoints ---
+        shutil.copy2(current, os.path.join(data_dir, f"ckpt_{resume_step}.npz"))
+        ring = sorted(
+            (f for f in os.listdir(data_dir) if re.fullmatch(r"ckpt_\d+\.npz", f)),
+            key=lambda f: int(f[5:-4]),
+        )
+        for f in ring[:-20]:          # keep newest 20
+            os.remove(os.path.join(data_dir, f))
     finally:
         if os.path.exists(temp):
             os.remove(temp)
