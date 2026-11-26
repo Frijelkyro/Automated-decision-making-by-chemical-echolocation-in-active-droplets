@@ -1,226 +1,150 @@
 #!/usr/bin/env python3
-"""Plot concentration along the maze path (+ heatmap) for one run or a whole experiment series.
+"""Concentration along the optimal maze path, for every parameter configuration of an experiment TOML.
 
-Examples:
-  python plot_path_concentration.py --series-dir data/reaper_emission_scan \
-      --jobs output/reaper_emission_scan/jobs.txt --out-dir plots/reaper_emission_scan
-  python plot_path_concentration.py --series-dir data/reaper_emission_scan --pattern 'quadratic_c000*' --show
+Writes to output/<series>/concentration_analysis/:
+  optimal_path.{png,csv,md}   the single path used for all plots + how it was computed
+  <run_id>/shot_NNN.png       10 profiles (label = simulation time) over distance from start,
+                              each shifted so the mean of its last --tail cells is 0
+
+Everything is in simulation coordinates (x, y) = the frame of conc_*.npz; no rotation needed.
+Example: python scripts/plot_path_concentration.py --config experiments/simulation_series_parameters.toml
 """
-import argparse, re, shlex, sys
-from fnmatch import fnmatch
+import argparse, heapq, itertools, re, sys, tomllib
 from pathlib import Path
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import tomllib
-from collections import deque
 from scipy.ndimage import distance_transform_edt
-import heapq
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from maze_functions import maze_from_file
 from storage import read_concentration
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+DX = 1.0  # grid spacing used by maze_cluster_script.py
 
 
-def project_path(value):
-    path = Path(value).expanduser()
-    return (path if path.is_absolute() else PROJECT_ROOT / path).resolve()
+def load_toml(p):
+    p = Path(p)
+    return tomllib.loads((p if p.is_absolute() else ROOT / p).read_text())
 
 
-def resolve_config_paths(config_path, startpoints_config):
-    with project_path(config_path).open("rb") as config_file:
-        config = tomllib.load(config_file)
-    series = config["series"]
-    series_dir = project_path(Path(series.get("data_root", "data")) / series["name"])
-    output_dir = project_path(Path(series.get("output_root", "output")) / series["name"])
-    profile_name = config.get("defaults", {}).get(
-        "maze_config", "Ran_maze_size_prop_to_droplet"
-    )
-    with project_path(startpoints_config).open("rb") as startpoints_file:
-        profiles = tomllib.load(startpoints_file)["configurations"]
-    maze_path = project_path(profiles[profile_name]["maze_file"])
-    maze_meta = maze_path.parent / f"{maze_path.stem}_analysis" / "maze_metadata.toml"
-    return series_dir, maze_meta, output_dir / "path_concentration", output_dir / "jobs.txt", maze_path
-
-
-def bfs_path(maze, start, goal, wall=1, wall_repulsion=5.0):
-    """Shortest path with wall repulsion via Dijkstra on a distance-transform potential."""
-    open_mask = maze != wall
-    dist_to_wall = distance_transform_edt(open_mask)          # 0 at walls, grows inward
-    cost_map = 1.0 + wall_repulsion / (dist_to_wall + 0.5)   # high near walls, ~1 in corridors
-
-    INF = float("inf")
-    best = np.full(maze.shape, INF)
+def optimal_path(open_, start, goal, rep):
+    """Dijkstra on 4-neighbours; cost of entering a cell = 1 + rep / (distance_to_wall + 0.5)."""
+    cost = 1 + rep / (distance_transform_edt(open_) + 0.5)
+    best = np.full(open_.shape, np.inf)
     best[start] = 0.0
-    prev = {start: None}
-    heap = [(0.0, start)]
-
+    prev, heap = {start: None}, [(0.0, start)]
     while heap:
         d, u = heapq.heappop(heap)
         if u == goal:
             break
         if d > best[u]:
             continue
-        r, c = u
-        for n in ((r+1,c),(r-1,c),(r,c+1),(r,c-1)):
-            if 0 <= n[0] < maze.shape[0] and 0 <= n[1] < maze.shape[1] and open_mask[n]:
-                nd = d + cost_map[n]
-                if nd < best[n]:
-                    best[n] = nd; prev[n] = u
-                    heapq.heappush(heap, (nd, n))
-
+        for n in ((u[0] + 1, u[1]), (u[0] - 1, u[1]), (u[0], u[1] + 1), (u[0], u[1] - 1)):
+            if 0 <= n[0] < open_.shape[0] and 0 <= n[1] < open_.shape[1] and open_[n] and d + cost[n] < best[n]:
+                best[n] = d + cost[n]
+                prev[n] = u
+                heapq.heappush(heap, (best[n], n))
     if goal not in prev:
-        raise ValueError(f"No open path from {start} to {goal}")
-    path, node = [], goal
-    while node is not None:
-        path.append(node); node = prev[node]
-    return path[::-1]
+        sys.exit(f"No open path from {start} to {goal}")
+    path, n = [], goal
+    while n is not None:
+        path.append(n)
+        n = prev[n]
+    return np.array(path[::-1])
 
 
-def load_conc(f, shape, k=1):
-    """conc_*.npz['concentration'] lives in the sim frame (= rot90(TSV, -1)); rotate back into TSV frame."""
-    c = read_concentration(f, f.parent)
-    if c.ndim == 3:
-        c = c[0]
-    c = np.rot90(c, k)
-    return c if c.shape == shape else None
-
-def read_jobs(p):
-    """Parse jobs.txt -> {(run_id, shot): {param: value}}."""
-    if not p or not Path(p).is_file():
-        return {}
-    jobs = {}
-    for line in Path(p).read_text().splitlines():
-        t = shlex.split(line)
-        d = {a[2:]: v for a, v in zip(t, t[1:]) if a.startswith("--")}
-        if "run-id" in d:
-            jobs[(d["run-id"], int(d.get("shot", 0)))] = d
-    return jobs
-
-
-def plot_run(d, maze, path, args, jobs):
-    m = re.fullmatch(r"shot_(\d+)", d.name)
-    rid, shot = (d.parent if m else d).name, int(m[1]) if m else 0
-    j = jobs.get((rid, shot), {})
-    dash = lambda v: str(float(v)).replace(".", "-")  # 12 -> "12-0", 0.01 -> "0-01"
-    if {"grim-reaper-delay", "emission-rate", "desired-time"} <= j.keys():
-        name = f"rt{dash(j['grim-reaper-delay'])}_er{dash(j['emission-rate'])}_{float(j['desired-time']):g}s" + (f"_shot{shot:03d}" if shot else "")
-    else:  # no jobs.txt entry -> fall back to run id
-        name = f"{rid}_shot{shot:03d}"
-    out = Path(args.out_dir) / f"{name}.png"
-    if args.skip_existing and out.exists():
-        return print(f"skip  {out}")
-
-    steps = sorted((int(g[1]), f) for f in d.glob("conc_*.npz")
-                   if (g := re.fullmatch(r"conc_(\d+)\.npz", f.name)) and int(g[1]) <= args.max_step)
-    if not steps:
-        return print(f"WARN  no conc_*.npz in {d}")
-    idx = np.unique(np.linspace(0, len(steps) - 1, min(args.n_curves, len(steps)), dtype=int))
-    data = [(steps[i][0], c) for i in idx if (c := load_conc(steps[i][1], maze.shape, args.rot90)) is not None]
-    if not data:
-        return print(f"WARN  no concentration file in {d} matches maze shape {maze.shape}")
-
-    info = ", ".join(f"{lbl}={j[k]}" for k, lbl in (("emission-rate", "emission rate"), ("grim-reaper-delay", "reaper delay")) if k in j)
-    py, px = np.array(path).T
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
-    fig.suptitle(f"{rid} (shot {shot})" + (f" - {info}" if info else ""), fontsize=16)
-
-    for (ts, c), col in zip(data, plt.cm.viridis(np.linspace(0, 1, len(data)))):
-        ax1.plot(c[py, px], color=col, lw=2, label=f"Timestep {ts}")
-    ax1.set(title="Concentration Profile Along Path Over Time", xlabel="Cell Number (Step along path)", ylabel="Concentration")
-    ax1.grid(True, ls="--", alpha=0.6)
-    ax1.legend(loc="lower left", fontsize=10, title="Timesteps")
-
-    im = ax2.imshow(data[-1][1], cmap="inferno")
-    fig.colorbar(im, ax=ax2, fraction=0.046, pad=0.04, label="Concentration")
-    wy, wx = np.where(maze == args.wall)
-    ax2.plot(wx, wy, "s", ms=4, color="#B8C7E5", label="Wall")
-    ax2.plot(px, py, "r-", lw=1.5, label="Path to Goal")
-    ax2.plot(px[0], py[0], "go", ms=8, label="Start")
-    ax2.plot(px[-1], py[-1], "ro", ms=8, label="End")
-    ax2.set(title=f"Concentration Heatmap (Timestep: {data[-1][0]})", xlabel="X coordinate", ylabel="Y coordinate", aspect="equal")
-    ax2.legend(loc="upper right", fontsize=10)
-
-    fig.tight_layout()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=args.dpi, bbox_inches="tight")
-    print(f"saved {out}")
-    if args.show:
-        plt.show()
-    plt.close(fig)
+def sim_time(f, ts, par):
+    """simulation_time stored in the npz, else rebuilt from the timestep (each solver loop advances n_steps ids but (n_steps-1)*dt)."""
+    try:
+        return float(np.load(f)["simulation_time"])
+    except Exception:
+        n = par.get("n_steps", 100)
+        k, loc = divmod(ts, n)
+        return (k * (n - 1) + loc) * par.get("dt", 5e-4)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", type=Path, help="Experiment series TOML; derives data, maze metadata, jobs, and output paths.")
-    ap.add_argument("--startpoints-config", type=Path, default=PROJECT_ROOT / "maze_startpoints_configuration.toml")
-    ap.add_argument("--series-dir", help="Series data root or a single run/shot directory")
-    ap.add_argument("--maze-meta",
-                    help="maze_metadata.toml (maze_file, wall_value, emitter_grid, goal_grid)")
-    ap.add_argument("--out-dir", help="Where to save the PNGs")
-    ap.add_argument("--jobs", help="Optional jobs.txt to put emission rate / reaper delay into titles")
-    ap.add_argument("--pattern", default="*", help="fnmatch filter on run dir path relative to --series-dir")
-    ap.add_argument("--n-curves", type=int, default=10, help="Number of evenly spaced timesteps per plot")
-    ap.add_argument("--max-step", type=int, default=2_000_000, help="Ignore conc files above this timestep")
-    ap.add_argument("--rot90", type=int, default=1, help="rotations applied to conc to get into TSV frame (sim frame is rot90(-1) of TSV)")
-    ap.add_argument("--dpi", type=int, default=300)
-    ap.add_argument("--skip-existing", action="store_true", help="Skip runs whose PNG already exists")
-    ap.add_argument("--show", action="store_true", help="Also open an interactive window per plot")
-    ap.add_argument("--wall-repulsion", type=float, default=5.0,
-                help="Wall repulsion strength for path planning (0 = pure shortest path, try 5-20)")
-    args = ap.parse_args()
-    if not args.show:
-        plt.switch_backend("Agg")
+    ap.add_argument("--config", type=Path, default=ROOT / "experiments" / "simulation_series_parameters.toml")
+    ap.add_argument("--n-curves", type=int, default=10, help="Linspaced profiles per plot")
+    ap.add_argument("--tail", type=int, default=8, help="Last N path cells whose mean is shifted to 0")
+    ap.add_argument("--wall-repulsion", type=float, default=5.0, help="0 = pure shortest path")
+    ap.add_argument("--dpi", type=int, default=200)
+    ap.add_argument("--skip-existing", action="store_true")
+    a = ap.parse_args()
 
-    configured_maze_path = None
-    if args.config:
-        try:
-            configured_series, configured_meta, configured_output, configured_jobs, configured_maze_path = resolve_config_paths(
-                args.config, args.startpoints_config
-            )
-        except (KeyError, OSError, tomllib.TOMLDecodeError, ValueError) as error:
-            ap.error(str(error))
-        args.series_dir = args.series_dir or str(configured_series)
-        args.maze_meta = args.maze_meta or str(configured_meta)
-        args.out_dir = args.out_dir or str(configured_output)
-        args.jobs = args.jobs or (str(configured_jobs) if configured_jobs.is_file() else None)
-    else:
-        args.maze_meta = args.maze_meta or str(
-            PROJECT_ROOT / "different_mazes/Ran_maze_size_prop_to_droplet_analysis/maze_metadata.toml"
-        )
-    if not args.series_dir or not args.out_dir:
-        ap.error("--series-dir and --out-dir are required unless --config is provided")
+    cfg = load_toml(a.config)
+    s, defaults = cfg["series"], cfg.get("defaults", {})
+    series_dir = ROOT / s.get("data_root", "data") / s["name"]
+    out = ROOT / s.get("output_root", "output") / s["name"] / "concentration_analysis"
+    out.mkdir(parents=True, exist_ok=True)
 
-    root = Path(args.series_dir).expanduser()
-    if not root.is_absolute():
-        root = Path.cwd() / root
-    maze_meta_path = Path(args.maze_meta).expanduser()
-    meta = tomllib.loads(maze_meta_path.read_text())
-    metadata_maze_path = Path(meta["maze_file"]).expanduser()
-    if not metadata_maze_path.is_file() and not metadata_maze_path.is_absolute():
-        relative_to_metadata = maze_meta_path.parent / metadata_maze_path
-        if relative_to_metadata.is_file():
-            metadata_maze_path = relative_to_metadata
-    maze_path = (
-        metadata_maze_path
-        if metadata_maze_path.is_file() or configured_maze_path is None
-        else configured_maze_path
-    )
-    maze, args.wall = np.loadtxt(maze_path, delimiter="\t"), meta["wall_value"]
-    path = bfs_path(maze, tuple(meta["emitter_grid"]), tuple(meta["goal_grid"]), args.wall, args.wall_repulsion)
-    jobs = read_jobs(args.jobs)
-    print(f"path: {len(path)} cells (metadata path_length: {meta.get('path_length')})")
-    runs = [d for d in sorted({f.parent for f in root.rglob("conc_*.npz")})
-            if fnmatch(str(d.relative_to(root)), args.pattern)]
-    if not runs:
-        raise SystemExit(f"No conc_*.npz found under {root} (pattern '{args.pattern}')")
-    print(f"{len(runs)} run(s) found")
-    for d in runs:
-        try:
-            plot_run(d, maze, path, args, jobs)
-        except Exception as e:
-            print(f"ERROR {d}: {e}")
+    # ---- the one optimal path: emitter_position -> static_source_position of the maze profile ----
+    name = "Testrun" if defaults.get("test_run") else defaults.get("maze_config", "Ran_maze_size_prop_to_droplet")
+    prof = load_toml(ROOT / "maze_startpoints_configuration.toml")["configurations"][name]
+    maze_file = ROOT / prof["maze_file"]
+    maze = maze_from_file(str(maze_file))  # simulation frame, 0 = wall
+    open_ = maze != 0
+    snap = distance_transform_edt(~open_, return_indices=True)[1]  # nearest open cell for every cell
+    cell = lambda k: tuple(int(v) for v in snap[:, int(np.rint(prof[k][0] / DX)), int(np.rint(prof[k][1] / DX))])
+    start, goal = cell("emitter_position"), cell("static_source_position")
+    path = optimal_path(open_, start, goal, a.wall_repulsion)
+    px, py = path.T
+    dist = np.r_[0.0, np.cumsum(np.hypot(np.diff(px), np.diff(py)))] * DX
+
+    np.savetxt(out / "optimal_path.csv", np.c_[path, dist], delimiter=",", header="x_cell,y_cell,distance_from_start", fmt="%g")
+    (out / "optimal_path.md").write_text(
+        f"# Optimal path\n\nMaze: `{maze_file}` (profile `{name}`). Start = `emitter_position` {prof['emitter_position']}, "
+        f"goal = `static_source_position` {prof['static_source_position']}, both divided by dx={DX}, rounded to a grid cell "
+        f"and snapped to the nearest open cell if they fall into a wall: start {start}, goal {goal}.\n\n"
+        f"Computed with Dijkstra on the 4-connected grid of open cells. Entering a cell costs\n"
+        f"`1 + w / (d + 0.5)`, with d = Euclidean distance of the cell to the nearest wall "
+        f"(scipy `distance_transform_edt`) and w = {a.wall_repulsion} (`--wall-repulsion`).\n"
+        f"The path is therefore short but keeps away from walls instead of cutting corners.\n\n"
+        f"Length: {len(path)} cells, {dist[-1]:.1f} length units. `distance_from_start` is the cumulative Euclidean length along the path.\n"
+        f"Cells are (x, y) indices in the simulation frame, the same frame as `conc_*.npz`.\n")
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.imshow(open_.T, cmap="gray", origin="lower")
+    ax.plot(px, py, "r-", lw=1.5, label="Optimal path")
+    ax.plot(*start, "go", label="Start")
+    ax.plot(*goal, "ro", label="Goal")
+    ax.set(title=f"Optimal path ({len(path)} cells)", xlabel="x", ylabel="y")
+    ax.legend()
+    fig.savefig(out / "optimal_path.png", dpi=a.dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"path: {len(path)} cells -> {out}")
+
+    # ---- one folder per parameter configuration, one plot per shot ----
+    for reg in cfg["regimes"]:
+        keys = list(reg["grid"])
+        for i, vals in enumerate(itertools.product(*reg["grid"].values())):
+            par, run_id = defaults | dict(zip(keys, vals)), f"{reg['name']}_c{i:04d}"
+            label = ", ".join(f"{k}={par[k]}" for k in keys)
+            for shot_dir in sorted((series_dir / run_id).glob("shot_*")):
+                png = out / run_id / f"{shot_dir.name}.png"
+                if a.skip_existing and png.exists():
+                    continue
+                files = sorted((int(m[1]), f) for f in shot_dir.glob("conc_*.npz") if (m := re.fullmatch(r"conc_(\d+)\.npz", f.name)))
+                if not files:
+                    print(f"WARN  no conc files in {shot_dir}")
+                    continue
+                sel = [files[j] for j in np.unique(np.linspace(0, len(files) - 1, min(a.n_curves, len(files))).astype(int))]
+                fig, ax = plt.subplots(figsize=(10, 6))
+                for (ts, f), col in zip(sel, plt.cm.viridis(np.linspace(0, 1, len(sel)))):
+                    c = read_concentration(f, f.parent)
+                    c = (c[0] if c.ndim == 3 else c)[px, py]
+                    ax.plot(dist, c - c[-a.tail:].mean(), color=col, lw=2, label=f"t = {sim_time(f, ts, par):.2f}")
+                ax.set(title=f"{run_id} / {shot_dir.name}\n{label}", xlabel="Distance from start along optimal path",
+                       ylabel=f"Concentration - mean of last {a.tail} path cells")
+                ax.grid(True, ls="--", alpha=0.6)
+                ax.legend(title="Simulation time", fontsize=9)
+                png.parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(png, dpi=a.dpi, bbox_inches="tight")
+                plt.close(fig)
+                print(f"saved {png}")
 
 
 if __name__ == "__main__":
