@@ -205,7 +205,7 @@ def load_decision_data(files: list[Path]) -> tuple[dict[str, np.ndarray], list[s
                 times.append(np.asarray(sim_time, dtype=np.float64))
                 pids.append(np.asarray(pid, dtype=np.int64))
                 labels.append(_as_str(np.asarray(label)))
-                decisions.append(np.asarray(decision, dtype=np.int8))
+                decisions.append(np.asarray(decision))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             problems.append(f"{path}: could not be read ({exc})")
 
@@ -350,6 +350,7 @@ def event_progress_mask(events: dict[str, np.ndarray], meta: dict[str, Any], eli
         known_time = np.isfinite(events["time"])
         tolerance = max(float(meta.get("dt") or 0.0) * 1e-6, 1e-12)
         keep &= ~known_time | (events["time"] <= float(meta["progress_time"]) + tolerance)
+        keep &= np.isin(events["dec"], (0, 1))
     if eligible is not None and len(events["pid"]):
         valid_pid = (events["pid"] >= 0) & (events["pid"] < len(eligible))
         allowed = np.zeros(len(events["pid"]), dtype=bool)
@@ -536,6 +537,17 @@ def _sample_std_from_moments(total: float, total_sq: float, count: int) -> float
     return math.sqrt(max(float(variance), 0.0))
 
 
+def wilson_ci(successes: int, trials: int) -> tuple[float, float]:
+    if not trials:
+        return float("nan"), float("nan")
+    z = 1.959963984540054
+    p = successes / trials
+    d = 1 + z*z/trials
+    c = (p + z*z/(2*trials)) / d
+    m = z * math.sqrt(p*(1-p)/trials + z*z/(4*trials**2)) / d
+    return max(0.0, c-m), min(1.0, c+m)
+
+
 def particle_success_fractions(
     sums: dict[tuple[int, str], float], counts: Counter
 ) -> dict[int, float]:
@@ -552,31 +564,28 @@ def particle_success_fractions(
     }
 
 
-def write_average_csv(
-    path: Path,
-    sums: dict,
-    sums_sq: dict,
-    counts: Counter,
-    label_order: dict[str, int],
-) -> None:
+def write_average_csv(path, sums, sums_sq, counts, label_order):
     pids = sorted({pid for pid, _ in counts})
     labels = sorted(label_order, key=label_order.get)
     with path.open("w", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow([
             "particle_id", "junction_id", "mean_decision",
-            "std_decision_1sigma", "number_of_decisions",
+            "std_decision_1sigma", "ci95_lower", "ci95_upper",
+            "number_of_decisions",
         ])
         for pid in pids:
             for label in labels:
-                count = counts.get((pid, label), 0)
-                if count:
-                    total = sums[(pid, label)]
-                    std = _sample_std_from_moments(
-                        total, sums_sq[(pid, label)], count
-                    )
+                key = (pid, label)
+                n = counts.get(key, 0)
+                if n:
+                    total = sums[key]
+                    mean = total / n
+                    std = _sample_std_from_moments(total, sums_sq[key], n)
+                    lo, hi = wilson_ci(int(round(total)), n)
                     writer.writerow([
-                        pid, label, f"{total / count:.8g}", f"{std:.8g}", count
+                        pid, label, f"{mean:.8g}", f"{std:.8g}",
+                        f"{lo:.8g}", f"{hi:.8g}", n,
                     ])
 
 
@@ -633,30 +642,25 @@ def plot_particle_decisions(
     ncol = max(1, math.ceil(len(pids) / 25))
     fig, ax = plt.subplots(figsize=(10 + 0.6 * ncol, 7))
     for pid in pids:
-        y = np.full(len(labels), np.nan, dtype=float)
-        yerr = np.full(len(labels), np.nan, dtype=float)
+        y = np.full(len(labels), np.nan)
+        yerr = np.full((2, len(labels)), np.nan)
+
         for label in labels:
             key = (pid, label)
-            count = counts.get(key, 0)
-            if count:
-                total = sums[key]
-                y[label_to_col[label]] = total / count
-                yerr[label_to_col[label]] = _sample_std_from_moments(
-                    total, sums_sq[key], count
-                )
+            n = counts.get(key, 0)
+            if n:
+                mean = sums[key] / n
+                lo, hi = wilson_ci(int(round(sums[key])), n)
+                col = label_to_col[label]
+                y[col] = mean
+                yerr[:, col] = mean - lo, hi - mean
 
         color = cmap(norm(pid))
         fraction = success_by_particle[pid]
         ax.errorbar(
-            x,
-            y,
-            yerr=yerr,
-            marker="o",
-            markersize=3,
-            linewidth=1,
-            elinewidth=0.8,
-            capsize=2,
-            capthick=0.8,
+            x, y, yerr=yerr,
+            marker="o", markersize=3, linewidth=1,
+            elinewidth=0.8, capsize=2, capthick=0.8,
             color=color,
             label=f"{pid} (success={fraction:.1%})",
         )
@@ -702,7 +706,7 @@ def plot_particle_decisions(
     fig.text(
         0.01, 0.005,
         f"Pooled recorded events: {n_shots_with_events}/{n_shots} shots. "
-        "Points = mean; error bars = ±1 sample SD per particle/junction.\n"
+        "Points = mean; error bars = 95% Wilson binomial confidence intervals.\n"
         "Legend success = correct decisions / all recorded decisions for that particle; "
         "gaps = no recorded event. Particle IDs are simulation slot indices.",
         fontsize=7, va="bottom",
@@ -905,7 +909,7 @@ def evaluate_configuration(
         "spawned_particles_sum": spawned_total,
         "exited_particles_sum": exited_total,
         "recorded_events_used": total_events,
-        "event_rows_excluded_by_progress_filter": excluded_event_rows,
+        "event_rows_excluded_by_progress_or_invalidity": excluded_event_rows,
         "unique_particle_junction_pairs_observed": len(counts),
         "audit_expectation": requested_audit,
         "audit_assessable_shots": audit_assessable_shots,
@@ -933,7 +937,7 @@ def evaluate_configuration(
     print(f"Shots without checkpoints:         {shots_without_checkpoint}")
     print(f"Eligible spawned particles:        {eligible_total} (summed over shots)")
     print(f"Recorded events used in mean:      {total_events}")
-    print(f"Event rows excluded by progress:   {excluded_event_rows}")
+    print(f"Event rows excluded (progress/invalid): {excluded_event_rows}")
     print(f"Unique particle/junction pairs:    {len(counts)}")
     print(f"Audit expectation:                 {requested_audit}")
     if audit_assessable_shots:
