@@ -1,0 +1,31 @@
+[series]
+name = "ran_size_to_droplet_experiment_long_duration"
+data_root = "data"
+output_root = "output"
+
+[defaults]
+maze_config = "Ran_maze_size_prop_to_droplet"
+dt = 0.0005
+beta = -8
+emission_rate = 0.5        # droplets per time unit
+grim_reaper_delay = 1.0
+part_every = 100
+conc_every = 100
+n_steps = 100
+zones_file = "different_mazes/Ran_maze_size_prop_to_droplet_analysis/zone_masks.npz"
+desired_time = 2000         # total sim time; overrides num_particles
+# num_particles = 60       # only used if desired_time = 0
+test_run = false           # true forces the "Testrun" maze
+resume_simulation = true  # resume from ckpt_previous.npz
+seed = 0
+track_decisions = true     # needs zones_file
+decision_flush_loops = 1000
+stage_dir = "/dev/shm/maze_stage"   # tmpfs buffer for conc/part files
+stage_budget_gb = 0.05               # per job; total = this x --jobs
+
+[[regimes]]
+name = "ran_long_dur"
+shots = 1
+
+[regimes.grid]
+emission_rate = [0.05, 0.1, 0.2]

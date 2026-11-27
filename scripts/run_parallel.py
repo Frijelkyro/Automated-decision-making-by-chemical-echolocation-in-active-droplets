@@ -58,6 +58,7 @@ def main():
     if args.progress:
         command.append("--bar")
     command.append("--halt-on-error=never")  # set to 2 to kill all running jobs and exit as soon as any job fails
+    command.append("--termseq=TERM,120000,KILL,1000")
 
     with jobfile.open() as job_input:
         result = subprocess.run(command, stdin=job_input, cwd=ROOT)

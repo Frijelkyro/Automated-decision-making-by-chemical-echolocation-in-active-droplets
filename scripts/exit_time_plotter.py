@@ -37,7 +37,6 @@ runs = {}
 for reg in cfg["regimes"]:
     for i, vals in enumerate(itertools.product(*reg["grid"].values())):
         runs[f"{reg['name']}_c{i:04d}"] = cfg.get("defaults", {}) | dict(zip(reg["grid"], vals))
-
 data = {}
 for rid, p in runs.items():
     files = sorted((base / rid).glob("shot_*/exit_times.txt"))
@@ -45,26 +44,46 @@ for rid, p in runs.items():
         continue
     rate = p.get("emission_rate", 0.5)
 
+    # Same formula as maze_cluster_script.py (np.ceil, so float rounding matches exactly)
+    if p.get("desired_time"):
+        expected_n = int(np.ceil(rate * p["desired_time"]))
+    else:
+        expected_n = p.get("num_particles", 60)
+
     birth, exit_t, shot_id = [], [], []
-    n_never = 0
+    n_never, skipped = 0, []
     for k, f in enumerate(files):
         t = np.loadtxt(f, skiprows=1, usecols=0, ndmin=1)  # exit time - birth time, -1 = never exited
+        if len(t) != expected_n:
+            skipped.append((f.parent.name, len(t)))
+            continue
         ck = dbase / rid / f.parent.name / "ckpt_current.npz"
+        b = None
         if ck.exists():  # actual spawn times; fallback: nominal i / emission_rate
             with np.load(ck) as state:
-                b = state["birth_times"][: len(t)]
-        else:
-            b = np.arange(len(t)) / rate
-        t = t[: len(b)]
+                b = state["birth_times"]
+            if len(b) != expected_n:  # checkpoint disagrees with exit_times -> inconsistent shot
+                skipped.append((f.parent.name, f"ckpt has {len(b)}"))
+                continue
+        if b is None:
+            b = np.arange(expected_n) / rate
         ok = t >= 0
         n_never += int((~ok).sum())
         birth.append(b[ok])
         exit_t.append(t[ok])
         shot_id.append(np.full(ok.sum(), k))
 
+    if skipped:
+        print(f"[{rid}] rate={rate:g}: expected {expected_n} particles; "
+              f"skipped {len(skipped)}/{len(files)} shot(s): "
+              + ", ".join(f"{n} ({c})" for n, c in skipped))
+    if not birth:
+        print(f"[{rid}] no valid shots left, skipping run")
+        continue
+
     data[rid] = dict(
         rate=rate,
-        n_shots=len(files),
+        n_shots=len(birth),          # only shots actually used
         n_never=n_never,
         birth=np.concatenate(birth),
         exit=np.concatenate(exit_t),

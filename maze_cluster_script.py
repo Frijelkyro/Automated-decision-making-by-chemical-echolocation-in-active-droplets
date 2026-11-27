@@ -213,12 +213,15 @@ def flush_stage():
 if stage_dir is not None:
     atexit.register(flush_stage)  # normal end, finished, uncaught exceptions
 
-def _on_term(*_):
+stop_requested = False
+def _on_signal(signum, _frame):
     print(f"INTERRUPTED by SIGTERM at step {globals().get('global_step')}, "
           f"t={globals().get('simulation_time')}", flush=True)
-    sys.exit(143)
+    global stop_requested
+    stop_requested = True   # just set a flag; the loop handles it
 
-signal.signal(signal.SIGTERM, _on_term)
+signal.signal(signal.SIGTERM, _on_signal)
+signal.signal(signal.SIGINT, _on_signal)
 
 maze = maze_from_file(str(maze_file))
 wall = np.transpose(np.where(maze == 0))
@@ -557,6 +560,12 @@ for i in pbar:
         print(f"FINISHED: Loop {i}: step {end_step} t={simulation_time:.2f}/{desired_time} "
               f"{loop_duration:.3f}s", flush=True)
         break
+    if stop_requested:
+        print(f"PAUSED at step {end_step}, t={simulation_time:.2f}", flush=True)
+        if junction_tracker is not None:
+            junction_tracker.flush(output_dir)
+        flush_stage()
+        sys.exit(143)
     # set the first particles parameters for the next loop to the most recent from the current loop
     conc[0, :, :] = conc[-1, :, :]
     p[:, 0, :] = p[:, -1, :]
